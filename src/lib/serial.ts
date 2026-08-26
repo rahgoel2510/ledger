@@ -13,14 +13,23 @@ export function counterKeyForFy(financialYear: string): string {
   return `invoice-seq:${financialYear}`;
 }
 
+/**
+ * Used when the numbering settings are blank. Every field on the settings form
+ * is optional, so a serial still has to be well-formed for a profile that was
+ * saved half-filled — `//26-27/1` is not a serial anyone can file against.
+ */
+export const DEFAULT_SERIAL_PREFIX = "RGHUF/INV";
+export const DEFAULT_SERIAL_PADDING = 3;
+
 export function formatSerialNumber(
   profile: Pick<EntityProfile, "invoiceSerialPrefix" | "invoiceSerialPadding">,
   financialYear: string,
   sequence: number
 ): string {
-  const prefix = profile.invoiceSerialPrefix.replace(/\/+$/, "");
-  const padded = String(sequence).padStart(Math.max(1, profile.invoiceSerialPadding), "0");
-  return `${prefix}/${financialYear}/${padded}`;
+  const prefix = (profile.invoiceSerialPrefix || DEFAULT_SERIAL_PREFIX).trim().replace(/\/+$/, "");
+  const digits = Number(profile.invoiceSerialPadding);
+  const padding = Number.isFinite(digits) && digits >= 1 ? Math.floor(digits) : DEFAULT_SERIAL_PADDING;
+  return `${prefix || DEFAULT_SERIAL_PREFIX}/${financialYear}/${String(sequence).padStart(padding, "0")}`;
 }
 
 /**

@@ -128,6 +128,10 @@ test.describe("invoice PDF", () => {
     // third-party request" is the real property; flipping the context offline
     // would only prove that the dev server lazily serves its own JS chunks over
     // HTTP, which the service worker caches in production anyway.
+    //
+    // The app does make exactly one outbound call — the IFSC branch lookup — but
+    // it lives in Settings and sends only a branch code. Nothing on the path
+    // from invoice to PDF may leave the machine.
     const foreign: string[] = [];
     const origin = new URL(baseURL!).origin;
     // `blob:` and `data:` never leave the browser — the generated PDF is handed

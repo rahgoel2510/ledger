@@ -16,6 +16,8 @@ Commands: `npm run dev`, `npm run build` (static export to `out/`), `npm run lin
 - Assertions read IndexedDB directly via `readTable`, because the ledger and audit trail have no UI yet — that is the only way their rules stay covered until modules 4 and 8 ship.
 - `readTable` checks `indexedDB.databases()` before opening. A bare `indexedDB.open(name)` *creates* an empty database, which makes Dexie skip `populate` and never seed. Never remove that check.
 
+- An auto-fixture stubs the IFSC directory (`IFSC_DIRECTORY` in `fixtures.ts`). `completeEntityProfile` runs in nearly every spec and types an IFSC, so without it the suite would call a third-party service dozens of times per run. Tests wanting an outage or a 404 register their own `page.route` after it.
+
 Tests run serially (`workers: 1`): they share one origin's IndexedDB, and Playwright's per-test browser context is what isolates them. The `mobile-chromium` project runs only `mobile.spec.ts`; `desktop-chromium` ignores it.
 
 **One-time manual step:** GitHub Pages must be set to "GitHub Actions" as its source under the repo's Settings → Pages before `.github/workflows/deploy.yml` can publish.
@@ -81,7 +83,8 @@ Every module goes through these rather than touching Dexie directly. They encode
 
 - `db.ts` — Dexie schema, currently at **version 2**. Adding a table or field means a new `version(n).stores(...).upgrade(...)`; `populate` only fires for a brand-new database, so an upgrade path must seed anything new itself.
 - `types.ts` — all domain types. Note `StoredInvoiceStatus` (draft/sent/paid) vs `InvoiceStatus` (adds "overdue"): overdue is derived on read, never stored.
-- `entity-profile.ts` — the HUF's own particulars (bank wire block, GSTIN, LUT), a singleton row. `missingProfileFields()` gates PDF generation; invoicing UI surfaces the gaps rather than rendering blanks.
+- `entity-profile.ts` — the HUF's own particulars (bank wire block, GSTIN, LUT), a singleton row. `missingProfileFields()` gates PDF generation; invoicing UI surfaces the gaps rather than rendering blanks. **Every field on the Settings form is optional to save** — the profile is filled in over several sittings, so nothing there blocks a save. Compliance is enforced at the PDF instead, and Settings shows the same gap list as a banner. "Optional" still means validated: a malformed value present in a field is rejected (the form carries `noValidate`, so zod's messages are the only ones — the browser's native `type="email"` check would otherwise block submit before the resolver runs).
+- `ifsc.ts` — IFSC → bank/branch lookup against `ifsc.razorpay.com` (public, keyless). The **only** outbound call the app makes; it sends a branch code and nothing else. Returns a result union rather than throwing, because offline/404/outage all end the same way — the user types the branch in. Results cache to localStorage, deliberately not Dexie: public reference data about someone else's bank does not belong in the books or the backup file.
 - `serial.ts` — invoice serial allocation from a per-FY counter row, **not** `max(sequence)+1`. A deleted invoice's number is never reissued; gaps are the correct outcome.
 - `ledger.ts` — the double-entry posting engine. Its header comment is the authoritative statement of the posting rules; `assertBalanced` refuses to write an unbalanced set. Corrections are reversing entries (`reverseSource`), never edits.
 - `forex.ts` — the realized gain/loss formula. `realizedForexGainLoss()` matches CLAUDE.md verbatim (charges folded in); `pureForexVariance()` is the charges-excluded figure the ledger posts, so the P&L can show bank charges on their own line. The two net to the same total.

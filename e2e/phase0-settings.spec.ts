@@ -6,6 +6,7 @@ import {
   addInvoice,
   completeEntityProfile,
   COMPLETE_PROFILE,
+  IFSC_DIRECTORY_URL,
   type AuditEntryShape,
 } from "./fixtures";
 
@@ -15,19 +16,71 @@ import {
  */
 
 test.describe("entity profile", () => {
-  test("blocks saving until the legally required fields are present", async ({ page }) => {
+  test("saves a partly filled profile without demanding the rest", async ({ page }) => {
     await page.goto("/settings");
 
+    // A profile is assembled over weeks — the LUT number and SWIFT code arrive
+    // long after the name does. Every field is optional to save; what a
+    // compliant invoice needs is enforced at PDF generation instead.
+    await page.getByLabel("Legal name").fill("Rahul Goel HUF");
+    await page.getByLabel("PAN").fill("AAAAA0000A");
     await page.getByRole("button", { name: "Save profile" }).click();
 
-    // GSTIN and the bank wire block cannot be omitted from a compliant export
-    // invoice, so the form refuses rather than rendering blanks onto a PDF.
-    await expect(page.getByText("Required on a GST tax invoice.")).toBeVisible();
-    await expect(page.getByText("Required — clients wire to this account.")).toBeVisible();
-    await expect(page.getByText("Required for international transfers.")).toBeVisible();
+    await expect(page.getByText("Entity profile saved.")).toBeVisible();
 
-    const profile = await readTable<{ gstin: string }>(page, "entityProfile");
+    const profile = await readTable<{ legalName: string; pan: string; gstin: string }>(
+      page,
+      "entityProfile"
+    );
+    expect(profile[0].legalName).toBe("Rahul Goel HUF");
+    expect(profile[0].pan).toBe("AAAAA0000A");
     expect(profile[0].gstin).toBe("");
+  });
+
+  test("names what is still missing before an invoice can be issued", async ({ page }) => {
+    await page.goto("/settings");
+
+    // Guidance, not a blocker — the save button stays live throughout.
+    const banner = page.getByText(/an invoice PDF cannot be generated until/);
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("GSTIN");
+    await expect(banner).toContainText("SWIFT/BIC code");
+    await expect(page.getByRole("button", { name: "Save profile" })).toBeEnabled();
+
+    await completeEntityProfile(page);
+    await expect(page.getByText(/an invoice PDF cannot be generated until/)).toBeHidden();
+  });
+
+  test("still rejects a malformed value in an optional field", async ({ page }) => {
+    await page.goto("/settings");
+
+    // Optional means "may be left blank", not "is never checked" — a typo is a
+    // mistake, not a deferral.
+    await page.getByLabel("Email").fill("not-an-email");
+    await page.getByRole("button", { name: "Save profile" }).click();
+
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+
+    const profile = await readTable<{ email: string }>(page, "entityProfile");
+    expect(profile[0].email).toBe("");
+  });
+
+  test("falls back to a well-formed serial when the numbering fields are blank", async ({
+    page,
+  }) => {
+    await page.goto("/settings");
+
+    await page.getByLabel("Serial prefix").fill("");
+    await page.getByLabel("Sequence digits").fill("");
+
+    // Blank numbering settings must not yield "//26-27/1".
+    await expect(page.getByText(/RGHUF\/INV\/\d{2}-\d{2}\/001/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect(page.getByText("Entity profile saved.")).toBeVisible();
+
+    const profile = await readTable<{ invoiceSerialPadding: number }>(page, "entityProfile");
+    expect(profile[0].invoiceSerialPadding).toBe(3);
   });
 
   test("persists the profile across a reload and logs the change", async ({ page }) => {
@@ -60,6 +113,96 @@ test.describe("entity profile", () => {
     await expect(
       page.getByText(/Invoice PDFs need your entity and bank details first/)
     ).toBeHidden();
+  });
+});
+
+test.describe("IFSC branch lookup", () => {
+  test("fills the bank and branch from the IFSC code", async ({ page }) => {
+    await page.goto("/settings");
+
+    await page.getByLabel("IFSC code").fill("icic0001234");
+
+    // Codes are normalised as typed — the directory only answers upper case.
+    await expect(page.getByLabel("IFSC code")).toHaveValue("ICIC0001234");
+    await expect(page.getByText("ICICI Bank — BANDRA KURLA COMPLEX, MUMBAI")).toBeVisible();
+
+    await expect(page.getByLabel("Bank name")).toHaveValue("ICICI Bank");
+    await expect(page.getByLabel("Branch")).toHaveValue("BANDRA KURLA COMPLEX");
+    // This branch publishes a SWIFT code; most do not.
+    await expect(page.getByLabel("SWIFT / BIC code")).toHaveValue("ICICINBBCTS");
+
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect(page.getByText("Entity profile saved.")).toBeVisible();
+
+    const profile = await readTable<{ bankName: string; bankBranch: string }>(
+      page,
+      "entityProfile"
+    );
+    expect(profile[0].bankName).toBe("ICICI Bank");
+    expect(profile[0].bankBranch).toBe("BANDRA KURLA COMPLEX");
+  });
+
+  test("never overwrites details already typed in, but offers to", async ({ page }) => {
+    await page.goto("/settings");
+
+    // Whoever typed this called their bank. The directory does not get to
+    // silently overrule them.
+    await page.getByLabel("Bank name").fill("HDFC Bank Ltd");
+    await page.getByLabel("IFSC code").fill("HDFC0000123");
+
+    await expect(page.getByText("HDFC Bank — NEHRU PLACE, NEW DELHI")).toBeVisible();
+    await expect(page.getByLabel("Bank name")).toHaveValue("HDFC Bank Ltd");
+
+    // Branch was empty, so it filled on its own.
+    await expect(page.getByLabel("Branch")).toHaveValue("NEHRU PLACE");
+
+    await page.getByRole("button", { name: "Use these details" }).click();
+    await expect(page.getByLabel("Bank name")).toHaveValue("HDFC Bank");
+  });
+
+  test("leaves manual entry working when the directory is unreachable", async ({ page }) => {
+    // Registered after the auto-fixture's stub, so this handler wins.
+    await page.route(IFSC_DIRECTORY_URL, (route) => route.abort("failed"));
+
+    await page.goto("/settings");
+    await page.getByLabel("IFSC code").fill("HDFC0000123");
+
+    await expect(page.getByText(/Could not reach the IFSC directory/)).toBeVisible();
+
+    // The lookup is a convenience, never a gate: the wire block is still
+    // fillable and savable by hand.
+    await page.getByLabel("Bank name").fill("HDFC Bank");
+    await page.getByLabel("Branch").fill("Nehru Place");
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect(page.getByText("Entity profile saved.")).toBeVisible();
+
+    const profile = await readTable<{ bankName: string; bankIfsc: string }>(page, "entityProfile");
+    expect(profile[0].bankName).toBe("HDFC Bank");
+    expect(profile[0].bankIfsc).toBe("HDFC0000123");
+  });
+
+  test("says so when the code is not in the directory", async ({ page }) => {
+    await page.goto("/settings");
+
+    // Well-formed, but no such branch — the stub answers 404 as the real
+    // directory does.
+    await page.getByLabel("IFSC code").fill("ZZZZ0999999");
+
+    await expect(page.getByText(/No branch found for this IFSC/)).toBeVisible();
+    await expect(page.getByLabel("Bank name")).toHaveValue("");
+  });
+
+  test("does not call the directory for a half-typed code", async ({ page }) => {
+    const calls: string[] = [];
+    page.on("request", (request) => {
+      if (/ifsc\.razorpay\.com/.test(request.url())) calls.push(request.url());
+    });
+
+    await page.goto("/settings");
+    await page.getByLabel("IFSC code").fill("HDFC00");
+
+    await expect(page.getByText(/the bank and branch fill in automatically/)).toBeVisible();
+    expect(calls).toEqual([]);
   });
 });
 

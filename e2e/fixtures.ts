@@ -278,11 +278,71 @@ export async function openInvoice(page: Page, serial: string): Promise<void> {
 }
 
 /**
+ * Canned answers from the IFSC directory, keyed by code.
+ *
+ * The settings form looks a branch up as soon as a well-formed IFSC is typed,
+ * and `completeEntityProfile` runs in nearly every spec — left unstubbed the
+ * suite would hammer a third-party service dozens of times per run and fail
+ * whenever it is slow. Anything not listed here answers 404, which is how an
+ * unknown code behaves for real.
+ */
+export const IFSC_DIRECTORY: Record<string, Record<string, string>> = {
+  HDFC0000123: {
+    IFSC: "HDFC0000123",
+    BANK: "HDFC Bank",
+    BRANCH: "NEHRU PLACE",
+    ADDRESS: "12 NEHRU PLACE, NEW DELHI 110019",
+    CITY: "NEW DELHI",
+    CENTRE: "NEW DELHI",
+    STATE: "DELHI",
+    // Most branches publish no SWIFT code — the form has to cope with that
+    // rather than assume the lookup completes the wire block on its own.
+    SWIFT: "",
+  },
+  ICIC0001234: {
+    IFSC: "ICIC0001234",
+    BANK: "ICICI Bank",
+    BRANCH: "BANDRA KURLA COMPLEX",
+    ADDRESS: "BKC, MUMBAI 400051",
+    CITY: "MUMBAI",
+    CENTRE: "MUMBAI",
+    STATE: "MAHARASHTRA",
+    SWIFT: "ICICINBBCTS",
+  },
+};
+
+export const IFSC_DIRECTORY_URL = /^https:\/\/ifsc\.razorpay\.com\//;
+
+/**
  * Playwright gives every test its own browser context, and IndexedDB is scoped
  * to a context — so each test already starts on an empty database that the app
  * seeds itself. An explicit `deleteDatabase` in an init script would race with
  * Dexie's own open and could wipe the seed it had just written.
+ *
+ * The one automatic fixture stubs the IFSC directory. It is registered first, so
+ * a test that wants a different answer — an outage, a 404 — can call
+ * `page.route` again and have its handler take precedence.
  */
-export const test = base;
+export const test = base.extend<{ ifscDirectory: void }>({
+  ifscDirectory: [
+    async ({ page }, use) => {
+      await page.route(IFSC_DIRECTORY_URL, async (route) => {
+        const code = new URL(route.request().url()).pathname.replace(/^\//, "").toUpperCase();
+        const branch = IFSC_DIRECTORY[code];
+        if (!branch) {
+          await route.fulfill({ status: 404, contentType: "text/plain", body: "Not Found" });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(branch),
+        });
+      });
+      await use();
+    },
+    { auto: true },
+  ],
+});
 
 export { expect };
