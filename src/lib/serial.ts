@@ -1,0 +1,70 @@
+import { db } from "@/lib/db";
+import type { EntityProfile } from "@/lib/types";
+
+/**
+ * Invoice serial allocation: `{prefix}/{FY}/{seq}`, e.g. RGHUF/INV/26-27/001.
+ *
+ * The sequence comes from a dedicated counter row, NOT from `max(sequence)` over
+ * existing invoices. Deleting or voiding an invoice must never free its number
+ * for reuse (module 1, US-1) — a gap in the series is expected and fine, a
+ * duplicate serial is a compliance problem.
+ */
+export function counterKeyForFy(financialYear: string): string {
+  return `invoice-seq:${financialYear}`;
+}
+
+export function formatSerialNumber(
+  profile: Pick<EntityProfile, "invoiceSerialPrefix" | "invoiceSerialPadding">,
+  financialYear: string,
+  sequence: number
+): string {
+  const prefix = profile.invoiceSerialPrefix.replace(/\/+$/, "");
+  const padded = String(sequence).padStart(Math.max(1, profile.invoiceSerialPadding), "0");
+  return `${prefix}/${financialYear}/${padded}`;
+}
+
+/**
+ * Consumes the next sequence for a financial year. Must run inside (or be
+ * allowed to open) a readwrite transaction covering `counters` so two rapid
+ * invoice saves can't hand out the same number.
+ */
+export async function allocateSequence(financialYear: string): Promise<number> {
+  const key = counterKeyForFy(financialYear);
+  return db.transaction("rw", db.counters, async () => {
+    const current = await db.counters.get(key);
+    const next = (current?.value ?? 0) + 1;
+    await db.counters.put({ key, value: next });
+    return next;
+  });
+}
+
+/** What the next serial *would* be, without consuming it — for preview in the create form. */
+export async function peekNextSerial(
+  profile: Pick<EntityProfile, "invoiceSerialPrefix" | "invoiceSerialPadding">,
+  financialYear: string
+): Promise<string> {
+  const current = await db.counters.get(counterKeyForFy(financialYear));
+  return formatSerialNumber(profile, financialYear, (current?.value ?? 0) + 1);
+}
+
+/**
+ * Raises the counter so it never sits below an already-issued serial. Used after
+ * importing a backup, where invoices arrive without their counter rows.
+ */
+export async function reconcileCounters(): Promise<void> {
+  const invoices = await db.invoices.toArray();
+  const highest = new Map<string, number>();
+  for (const invoice of invoices) {
+    const seen = highest.get(invoice.financialYear) ?? 0;
+    if (invoice.sequence > seen) highest.set(invoice.financialYear, invoice.sequence);
+  }
+  await db.transaction("rw", db.counters, async () => {
+    for (const [fy, maxSequence] of highest) {
+      const key = counterKeyForFy(fy);
+      const current = await db.counters.get(key);
+      if ((current?.value ?? 0) < maxSequence) {
+        await db.counters.put({ key, value: maxSequence });
+      }
+    }
+  });
+}

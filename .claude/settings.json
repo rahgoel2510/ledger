@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install*)",
+      "Bash(npm ci*)",
+      "Bash(npm run *)",
+      "Bash(npx create-next-app*)",
+      "Bash(npx shadcn*)",
+      "Bash(npx tsc*)",
+      "Bash(node -v)",
+      "Bash(node --version)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add*)",
+      "Bash(git branch*)"
+    ]
+  }
+}
