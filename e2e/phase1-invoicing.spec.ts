@@ -6,6 +6,7 @@ import {
   addInvoice,
   completeEntityProfile,
   openInvoice,
+  setLineItemMode,
   type InvoiceShape,
 } from "./fixtures";
 
@@ -80,6 +81,7 @@ test.describe("creating an invoice", () => {
     await page.getByRole("button", { name: "New invoice" }).first().click();
 
     const sheet = page.getByRole("dialog");
+    await setLineItemMode(page, "fixed");
     await sheet.getByLabel("Description").fill("");
     await sheet.getByLabel(/^Rate \(/).fill("0");
     await sheet.getByRole("button", { name: "Save & issue" }).click();
@@ -115,6 +117,7 @@ test.describe("creating an invoice", () => {
     await sheet.getByLabel("Client").click();
     await page.getByRole("option", { name: /Acme Inc/ }).click();
     await sheet.getByLabel(/Exchange rate on invoice date/).fill("83");
+    await setLineItemMode(page, "fixed");
 
     await sheet.getByLabel("Description").first().fill("Discovery workshop");
     await sheet.getByLabel("Qty").first().fill("1");

@@ -32,8 +32,11 @@ test.describe("invoice serial numbering", () => {
     const first = await addInvoice(page, { clientName: "Acme Inc", fxRate: "83.10" });
     const second = await addInvoice(page, { clientName: "Acme Inc", fxRate: "83.20" });
 
-    expect(first).toMatch(/^RGHUF\/INV\/\d{2}-\d{2}\/001$/);
-    expect(second).toMatch(/^RGHUF\/INV\/\d{2}-\d{2}\/002$/);
+    expect(first).toMatch(/^RGHUF\/\d{2}-\d{2}\/001$/);
+    expect(second).toMatch(/^RGHUF\/\d{2}-\d{2}\/002$/);
+    // Rule 46(b) caps a serial at 16 characters, which is why the default
+    // prefix is the entity alone and not "RGHUF/INV".
+    expect(first.length).toBeLessThanOrEqual(16);
 
     const invoices = await readTable<InvoiceShape>(page, "invoices");
     expect(invoices.map((i) => i.sequence).sort()).toEqual([1, 2]);

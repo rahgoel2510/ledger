@@ -1,4 +1,4 @@
-import type { CurrencyCode, Invoice, InvoiceLineItem } from "@/lib/types";
+import type { CurrencyCode, Invoice, InvoiceLineItem, InvoiceTask } from "@/lib/types";
 import { BASE_CURRENCY_CODE } from "@/lib/currencies";
 
 /**
@@ -10,17 +10,98 @@ export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-export function lineItemAmount(item: InvoiceLineItem): number {
-  return round2(item.quantity * item.unitPrice);
+/** Hours logged against a line's itemised tasks. Zero when it has none. */
+export function taskHours(tasks: InvoiceTask[] | undefined): number {
+  return round2((tasks ?? []).reduce((sum, task) => sum + task.hours, 0));
 }
 
-/** Invoice total in its own (foreign) currency. IGST is always 0% — see CLAUDE.md. */
-export function invoiceTotalFcy(invoice: Pick<Invoice, "lineItems">): number {
+/**
+ * The quantity a line is actually billed on.
+ *
+ * A line with an itemised breakdown is billed on the sum of its tasks, not on
+ * the number stored beside it: the annexure and the invoice face are the same
+ * document, so a total that disagreed with the rows printed under it would be an
+ * arithmetic error a client can see. `quantity` is kept in step as a convenience
+ * for the list views; this is the figure every total is built from.
+ */
+export function lineItemQuantity(item: InvoiceLineItem): number {
+  if (item.tasks?.length) return taskHours(item.tasks);
+  return item.quantity;
+}
+
+export function lineItemAmount(item: InvoiceLineItem): number {
+  return round2(lineItemQuantity(item) * item.unitPrice);
+}
+
+/** Lines carrying an itemised breakdown, in invoice order — the annexure's sections. */
+export function annexureLines(invoice: Pick<Invoice, "lineItems">): InvoiceLineItem[] {
+  return invoice.lineItems.filter((item) => (item.tasks?.length ?? 0) > 0);
+}
+
+export function hasAnnexure(invoice: Pick<Invoice, "lineItems">): boolean {
+  return annexureLines(invoice).length > 0;
+}
+
+/**
+ * Every hour on the invoice, whether logged as a bare hourly line or itemised
+ * into tasks. Flat retainer lines contribute nothing — their quantity is a
+ * count of periods, not time.
+ */
+export function invoiceTotalHours(invoice: Pick<Invoice, "lineItems">): number {
+  return round2(
+    invoice.lineItems
+      .filter((item) => item.unit === "hours")
+      .reduce((sum, item) => sum + lineItemQuantity(item), 0)
+  );
+}
+
+/**
+ * Enough of an invoice to total it up. `gstRate` is optional so a half-built
+ * form object still totals; absent means 0%, which is what an export invoice
+ * carries anyway (zero-rated under LUT — see CLAUDE.md).
+ */
+export type TaxableInvoice = Pick<Invoice, "lineItems"> & { gstRate?: number };
+
+/** Line items only, before tax. */
+export function invoiceSubtotalFcy(invoice: TaxableInvoice): number {
   return round2(invoice.lineItems.reduce((sum, item) => sum + lineItemAmount(item), 0));
 }
 
-/** Invoice total translated at the frozen invoice-date FX rate. Never re-fetch the rate. */
-export function invoiceTotalInr(invoice: Pick<Invoice, "lineItems" | "invoiceDateFxRate">): number {
+/** GST charged, at the rate the user stated. Always 0 on an export invoice. */
+export function invoiceTaxFcy(invoice: TaxableInvoice): number {
+  const rate = invoice.gstRate ?? 0;
+  if (!rate) return 0;
+  return round2((invoiceSubtotalFcy(invoice) * rate) / 100);
+}
+
+/**
+ * What the client actually owes — subtotal plus GST. This is the figure the
+ * receivable, the remittance matching, and the PDF's Total all use, so an
+ * invoice is only settled once the tax has been received too.
+ */
+export function invoiceTotalFcy(invoice: TaxableInvoice): number {
+  return round2(invoiceSubtotalFcy(invoice) + invoiceTaxFcy(invoice));
+}
+
+/**
+ * Splits GST into the halves a CGST/SGST invoice prints. Arithmetic on the
+ * stated rate — it is not a determination of whether the supply is intra-state.
+ */
+export function gstHalves(amount: number): { half: number; rest: number } {
+  const half = round2(amount / 2);
+  return { half, rest: round2(amount - half) };
+}
+
+/** Invoice amounts translated at the frozen invoice-date FX rate. Never re-fetch the rate. */
+export function invoiceSubtotalInr(invoice: TaxableInvoice & Pick<Invoice, "invoiceDateFxRate">): number {
+  return round2(invoiceSubtotalFcy(invoice) * invoice.invoiceDateFxRate);
+}
+
+export function invoiceTaxInr(invoice: TaxableInvoice & Pick<Invoice, "invoiceDateFxRate">): number {
+  return round2(invoiceTaxFcy(invoice) * invoice.invoiceDateFxRate);
+}
+
+export function invoiceTotalInr(invoice: TaxableInvoice & Pick<Invoice, "invoiceDateFxRate">): number {
   return round2(invoiceTotalFcy(invoice) * invoice.invoiceDateFxRate);
 }
 

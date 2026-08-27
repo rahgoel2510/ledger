@@ -6,6 +6,7 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { cn } from "@/lib/utils";
 import { WifiOff } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
+import { AccountMenu } from "@/components/app-shell/account-menu";
 
 export function TopBar() {
   const isOnline = useOnlineStatus();
@@ -33,6 +34,7 @@ export function TopBar() {
           </>
         )}
       </div>
+      <AccountMenu />
     </header>
   );
 }

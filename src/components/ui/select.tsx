@@ -7,9 +7,27 @@ import { cn } from "@/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
 function Select({
+  onValueChange,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />
+  return (
+    <SelectPrimitive.Root
+      data-slot="select"
+      onValueChange={(value) => {
+        // Radix mirrors the value into a hidden native <select> so the field
+        // bubbles in a plain form, and that select only carries options for
+        // items which have mounted -- which is never, until the dropdown has
+        // been opened once. So a value set in code (picking a client adopts
+        // their currency) is assigned to a native select with no such option,
+        // lands on "", and echoes a change event straight back, wiping the
+        // value the caller just set. Radix forbids an item with an empty value,
+        // so "" is only ever that echo and never somebody's choice.
+        if (value === "") return
+        onValueChange?.(value)
+      }}
+      {...props}
+    />
+  )
 }
 
 function SelectGroup({

@@ -3,7 +3,16 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { toast } from "sonner";
-import { Download, Loader2, Pencil, Send, Trash2, Undo2, Wallet } from "lucide-react";
+import {
+  Download,
+  Loader2,
+  Pencil,
+  Send,
+  TriangleAlert,
+  Trash2,
+  Undo2,
+  Wallet,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -37,10 +46,23 @@ import {
   receivedFcy,
   setInvoiceStatus,
 } from "@/lib/invoices";
-import { formatFxRate, formatMoney, invoiceTotalFcy, invoiceTotalInr, lineItemAmount } from "@/lib/money";
+import {
+  formatFxRate,
+  formatMoney,
+  formatNumber,
+  gstHalves,
+  invoiceSubtotalFcy,
+  invoiceTaxFcy,
+  invoiceTotalFcy,
+  invoiceTotalHours,
+  invoiceTotalInr,
+  lineItemAmount,
+  lineItemQuantity,
+} from "@/lib/money";
 import { formatFinancialYear, parseIsoDate } from "@/lib/fy";
 import { downloadInvoicePdf } from "@/lib/invoice-pdf";
 import { IGST_EXPORT_DISCLAIMER, IGST_LINE_LABEL } from "@/lib/igst";
+import { invoiceComplianceGaps, invoiceTotalInWords } from "@/lib/compliance";
 
 export function InvoiceDetailSheet({
   invoice,
@@ -67,9 +89,21 @@ export function InvoiceDetailSheet({
 
   const status = deriveInvoiceStatus(invoice, remittances);
   const totalFcy = invoiceTotalFcy(invoice);
+  const subtotalFcy = invoiceSubtotalFcy(invoice);
+  const taxFcy = invoiceTaxFcy(invoice);
+  const split = gstHalves(taxFcy);
+  const isExport = invoice.placeOfSupply !== "domestic";
+  const hourlyLines = invoice.lineItems.filter((item) => item.unit === "hours");
+  const totalHours = invoiceTotalHours(invoice);
   const received = receivedFcy(remittances);
   const outstanding = outstandingFcy(invoice, remittances);
   const covered = isFullyCovered(invoice, remittances);
+
+  // Advisory, not a gate: the PDF still generates. What is missing here is
+  // particular to this invoice's own supply, so it can only be judged once the
+  // invoice exists -- and a document that cannot be produced at all is worse
+  // than one carrying a gap the user can see and close.
+  const gaps = invoiceComplianceGaps(invoice, profile);
 
   async function onDownload() {
     setDownloading(true);
@@ -142,27 +176,89 @@ export function InvoiceDetailSheet({
             <Separator />
 
             <div>
-              <h3 className="mb-2 text-sm font-medium text-muted-foreground">Line items</h3>
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h3 className="text-sm font-medium text-muted-foreground">Line items</h3>
+                {hourlyLines.length > 0 && (
+                  <span className="text-muted-foreground text-xs tabular-nums">
+                    {formatNumber(totalHours, "en-US")} hrs over {hourlyLines.length}{" "}
+                    {hourlyLines.length === 1 ? "line" : "lines"}
+                  </span>
+                )}
+              </div>
               <div className="space-y-2">
                 {invoice.lineItems.map((item) => (
-                  <div key={item.id} className="flex items-baseline justify-between gap-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate">{item.description}</p>
-                      <p className="text-muted-foreground">
-                        {item.quantity} × {formatMoney(item.unitPrice, invoice.currency)}
-                      </p>
+                  <div key={item.id} className="text-sm">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate">
+                          {item.date && (
+                            <span className="text-muted-foreground mr-2 tabular-nums">
+                              {item.date}
+                            </span>
+                          )}
+                          {item.description}
+                        </p>
+                        <p className="text-muted-foreground">
+                          {lineItemQuantity(item)}
+                          {item.unit === "hours" ? " hrs" : ""} ×{" "}
+                          {formatMoney(item.unitPrice, invoice.currency)}
+                          {item.unit === "hours" ? " / hour" : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 tabular-nums">
+                        {formatMoney(lineItemAmount(item), invoice.currency)}
+                      </span>
                     </div>
-                    <span className="shrink-0 tabular-nums">
-                      {formatMoney(lineItemAmount(item), invoice.currency)}
-                    </span>
+
+                    {/* The same rows the PDF prints as Annexure A. Shown here so
+                        the breakdown can be checked without generating a PDF. */}
+                    {(item.tasks?.length ?? 0) > 0 && (
+                      <ul className="border-border/70 mt-2 ml-1 space-y-1 border-l pl-3">
+                        {item.tasks!.map((task) => (
+                          <li
+                            key={task.id}
+                            className="text-muted-foreground flex items-baseline justify-between gap-3 text-xs"
+                          >
+                            <span className="min-w-0">
+                              <span className="mr-2 tabular-nums">{task.date}</span>
+                              {task.description}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {formatNumber(task.hours, "en-US")} hrs
+                            </span>
+                          </li>
+                        ))}
+                        <li className="text-muted-foreground/80 text-xs">
+                          Prints as Annexure A on the invoice PDF.
+                        </li>
+                      </ul>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="space-y-1 rounded-lg bg-muted p-3 text-sm">
-              <Row label="Subtotal" value={formatMoney(totalFcy, invoice.currency)} />
-              <Row label={IGST_LINE_LABEL} value={formatMoney(0, invoice.currency)} />
+              <Row label="Subtotal" value={formatMoney(subtotalFcy, invoice.currency)} />
+              {isExport ? (
+                <Row label={IGST_LINE_LABEL} value={formatMoney(0, invoice.currency)} />
+              ) : invoice.taxTreatment === "cgst_sgst" ? (
+                <>
+                  <Row
+                    label={`CGST @ ${invoice.gstRate / 2}%`}
+                    value={formatMoney(split.half, invoice.currency)}
+                  />
+                  <Row
+                    label={`SGST @ ${invoice.gstRate / 2}%`}
+                    value={formatMoney(split.rest, invoice.currency)}
+                  />
+                </>
+              ) : (
+                <Row
+                  label={`IGST @ ${invoice.gstRate}%`}
+                  value={formatMoney(taxFcy, invoice.currency)}
+                />
+              )}
               <Separator className="my-2" />
               <Row label="Total due" value={formatMoney(totalFcy, invoice.currency)} strong />
               <Row
@@ -193,12 +289,54 @@ export function InvoiceDetailSheet({
               </div>
             )}
 
-            <div className="rounded-lg border border-[color:var(--chart-2)]/30 bg-secondary/50 p-3">
-              <h3 className="mb-1 text-xs font-semibold tracking-wide text-[color:var(--chart-2)]">
-                DECLARATION ON PDF
-              </h3>
-              <p className="text-xs leading-relaxed">{IGST_EXPORT_DISCLAIMER}</p>
+            <div className="rounded-lg border p-3">
+              <h3 className="text-muted-foreground mb-1 text-xs font-medium">Total in words</h3>
+              <p className="text-sm">{invoiceTotalInWords(invoice)}</p>
             </div>
+
+            {gaps.india.length > 0 || gaps.unitedStates.length > 0 ? (
+              <div className="rounded-lg border border-[color:var(--status-overdue)]/40 bg-[color:var(--status-overdue)]/5 p-3">
+                <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold tracking-wide">
+                  <TriangleAlert className="size-3.5 text-[color:var(--status-overdue)]" />
+                  MISSING PARTICULARS
+                </h3>
+                {gaps.india.length > 0 && (
+                  <>
+                    <p className="text-muted-foreground text-xs font-medium">India</p>
+                    <ul className="mb-2 list-disc pl-4 text-xs leading-relaxed">
+                      {gaps.india.map((gap) => (
+                        <li key={gap}>{gap}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {gaps.unitedStates.length > 0 && (
+                  <>
+                    <p className="text-muted-foreground text-xs font-medium">United States</p>
+                    <ul className="list-disc pl-4 text-xs leading-relaxed">
+                      {gaps.unitedStates.map((gap) => (
+                        <li key={gap}>{gap}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {invoice.igstDisclaimerShown ? (
+              <div className="rounded-lg border border-[color:var(--chart-2)]/30 bg-secondary/50 p-3">
+                <h3 className="mb-1 text-xs font-semibold tracking-wide text-[color:var(--chart-2)]">
+                  DECLARATION ON PDF
+                </h3>
+                <p className="text-xs leading-relaxed">{IGST_EXPORT_DISCLAIMER}</p>
+              </div>
+            ) : (
+              <div className="text-muted-foreground rounded-lg border p-3 text-xs leading-relaxed">
+                Domestic supply — the export declaration is not printed on this invoice, and GST is
+                charged at the rate recorded above.
+                {invoice.sacCode ? ` SAC ${invoice.sacCode}.` : ""}
+              </div>
+            )}
           </div>
 
           <SheetFooter>

@@ -9,8 +9,9 @@ import type {
   Remittance,
 } from "@/lib/types";
 import { newId, nowIso } from "@/lib/ids";
-import { invoiceTotalFcy, invoiceTotalInr, round2 } from "@/lib/money";
+import { invoiceSubtotalInr, invoiceTaxInr, invoiceTotalFcy, invoiceTotalInr, round2 } from "@/lib/money";
 import { bookedInrValue, pureForexVariance } from "@/lib/forex";
+import { enqueueSync } from "@/lib/sync";
 
 /**
  * Double-entry posting engine (module 4, US-1 & US-4).
@@ -19,8 +20,13 @@ import { bookedInrValue, pureForexVariance } from "@/lib/forex";
  * than scattered across the pages that trigger it. Every amount is INR.
  *
  *   Invoice issued (Draft -> Sent):
- *     Dr accounts_receivable   total FCY x invoice-date FX rate
- *       Cr foreign_income      same
+ *     Dr accounts_receivable   total (incl. GST) FCY x invoice-date FX rate
+ *       Cr foreign_income / domestic_income   net of GST
+ *       Cr gst_payable         GST charged, if any
+ *   On an export invoice GST is zero, the gst_payable line is dropped as empty,
+ *   and this is the same two-line posting it has always been. GST collected on a
+ *   domestic invoice is a liability, never income — crediting it to income would
+ *   overstate the P&L by the tax.
  *   Nothing posts while an invoice is still a Draft — a draft is not yet a
  *   receivable and must not show up in income.
  *
@@ -81,11 +87,16 @@ function buildEntries(
 
 /** Ledger lines for an invoice being issued. Pure — see `postInvoiceIssued` to persist. */
 export function invoicePostingLines(invoice: Invoice): PostingLine[] {
-  const inr = invoiceTotalInr(invoice);
+  const total = invoiceTotalInr(invoice);
+  const income = invoiceSubtotalInr(invoice);
+  const tax = invoiceTaxInr(invoice);
+  const incomeAccount: LedgerAccount =
+    invoice.placeOfSupply === "domestic" ? "domestic_income" : "foreign_income";
   const memo = `${invoice.serialNumber} — ${invoice.clientSnapshot.name} (${invoice.currency} ${invoiceTotalFcy(invoice)})`;
   return [
-    { account: "accounts_receivable", debit: inr, credit: 0, memo },
-    { account: "foreign_income", debit: 0, credit: inr, memo },
+    { account: "accounts_receivable", debit: total, credit: 0, memo },
+    { account: incomeAccount, debit: 0, credit: income, memo },
+    { account: "gst_payable", debit: 0, credit: tax, memo },
   ];
 }
 
@@ -136,6 +147,7 @@ async function write(
   const entries = buildEntries(lines, meta);
   const table = tx ? tx.table<LedgerEntry>("ledgerEntries") : db.ledgerEntries;
   await table.bulkAdd(entries);
+  for (const entry of entries) await enqueueSync(tx, "ledgerEntries", entry.id);
 }
 
 export async function postInvoiceIssued(invoice: Invoice, tx: Transaction | null = null): Promise<void> {
@@ -189,19 +201,19 @@ export async function reverseSource(
   if (original.length === 0) return;
 
   const createdAt = nowIso();
-  await table.bulkAdd(
-    original.map((entry) => ({
-      id: newId(),
-      date,
-      account: entry.account,
-      debit: entry.credit,
-      credit: entry.debit,
-      sourceType: "reversal" as const,
-      sourceId: entry.id,
-      memo: `Reversal of ${entry.memo ?? entry.id}`,
-      createdAt,
-    }))
-  );
+  const reversals = original.map((entry) => ({
+    id: newId(),
+    date,
+    account: entry.account,
+    debit: entry.credit,
+    credit: entry.debit,
+    sourceType: "reversal" as const,
+    sourceId: entry.id,
+    memo: `Reversal of ${entry.memo ?? entry.id}`,
+    createdAt,
+  }));
+  await table.bulkAdd(reversals);
+  for (const entry of reversals) await enqueueSync(tx, "ledgerEntries", entry.id);
 }
 
 export async function hasPostingsFor(sourceType: LedgerSourceType, sourceId: string): Promise<boolean> {
@@ -215,6 +227,8 @@ export async function hasPostingsFor(sourceType: LedgerSourceType, sourceId: str
 export const LEDGER_ACCOUNT_LABELS: Record<LedgerAccount, string> = {
   accounts_receivable: "Accounts Receivable",
   foreign_income: "Foreign Income (Export of Services)",
+  domestic_income: "Domestic Service Income",
+  gst_payable: "GST Payable",
   bank: "Bank",
   forex_gain_loss: "Realized Forex Gain / (Loss)",
   bank_charges_expense: "Bank Charges",

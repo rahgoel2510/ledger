@@ -65,9 +65,20 @@ jobs:
       # NODE_ENV=production is what switches on the /vrikshafx basePath in
       # next.config.js. `next build` sets it, but making it explicit keeps the
       # asset paths from silently reverting to root-relative and 404-ing.
+      #
+      # The Firebase values are safe to expose (they identify the project, not
+      # a secret — see src/lib/firebase.ts) but still come from repo secrets so
+      # they aren't hardcoded here per-environment. Sync is skipped entirely
+      # (see `firebaseConfigured`) if these are ever unset.
       - run: npm run build
         env:
           NODE_ENV: production
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
 
       - uses: actions/configure-pages@v5
 

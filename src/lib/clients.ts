@@ -1,16 +1,22 @@
 import { db } from "@/lib/db";
-import type { Client, ClientSnapshot } from "@/lib/types";
+import type { Client } from "@/lib/types";
 import { newId, nowIso } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
+import { enqueueSync } from "@/lib/sync";
 
-export type ClientInput = ClientSnapshot;
+/**
+ * Everything a person types about a client. The identity and lifecycle fields
+ * (`id`, timestamps, `archived`) are the store's business, not the form's.
+ */
+export type ClientInput = Omit<Client, "id" | "createdAt" | "updatedAt" | "archived">;
 
 export async function createClient(input: ClientInput): Promise<Client> {
   const timestamp = nowIso();
   const client: Client = { ...input, id: newId(), archived: false, createdAt: timestamp, updatedAt: timestamp };
 
-  await db.transaction("rw", db.clients, db.auditLog, async (tx) => {
+  await db.transaction("rw", db.clients, db.auditLog, db.syncQueue, async (tx) => {
     await db.clients.add(client);
+    await enqueueSync(tx, "clients", client.id);
     await recordAudit(
       {
         actionType: "client_created",
@@ -32,12 +38,13 @@ export async function createClient(input: ClientInput): Promise<Client> {
  * silently rewrites a PDF that has already gone to the client (module 5, US-1).
  */
 export async function updateClient(id: string, input: ClientInput): Promise<void> {
-  await db.transaction("rw", db.clients, db.auditLog, async (tx) => {
+  await db.transaction("rw", db.clients, db.auditLog, db.syncQueue, async (tx) => {
     const before = await db.clients.get(id);
     if (!before) throw new Error("Client no longer exists.");
 
     const after: Client = { ...before, ...input, updatedAt: nowIso() };
     await db.clients.put(after);
+    await enqueueSync(tx, "clients", id);
 
     await recordAudit(
       {
@@ -63,7 +70,7 @@ export async function invoiceCountForClient(clientId: string): Promise<number> {
  * outright since nothing depends on it.
  */
 export async function removeClient(id: string): Promise<"archived" | "deleted"> {
-  return db.transaction("rw", db.clients, db.invoices, db.auditLog, async (tx) => {
+  return db.transaction("rw", db.clients, db.invoices, db.auditLog, db.syncQueue, async (tx) => {
     const client = await db.clients.get(id);
     if (!client) return "deleted";
 
@@ -71,6 +78,7 @@ export async function removeClient(id: string): Promise<"archived" | "deleted"> 
 
     if (invoiceCount === 0) {
       await db.clients.delete(id);
+      await enqueueSync(tx, "clients", id);
       await recordAudit(
         {
           actionType: "client_archived",
@@ -86,6 +94,7 @@ export async function removeClient(id: string): Promise<"archived" | "deleted"> 
     }
 
     await db.clients.put({ ...client, archived: true, updatedAt: nowIso() });
+    await enqueueSync(tx, "clients", id);
     await recordAudit(
       {
         actionType: "client_archived",
@@ -102,7 +111,10 @@ export async function removeClient(id: string): Promise<"archived" | "deleted"> 
 }
 
 export async function restoreClient(id: string): Promise<void> {
-  await db.clients.update(id, { archived: false, updatedAt: nowIso() });
+  await db.transaction("rw", db.clients, db.syncQueue, async (tx) => {
+    await db.clients.update(id, { archived: false, updatedAt: nowIso() });
+    await enqueueSync(tx, "clients", id);
+  });
 }
 
 /** Case-insensitive match on name, contact, or tax ID — what you would type when hunting for a client. */

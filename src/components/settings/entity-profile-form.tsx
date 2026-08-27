@@ -24,6 +24,7 @@ import { db } from "@/lib/db";
 import { ENTITY_PROFILE_ID, type EntityProfile } from "@/lib/types";
 import { nowIso } from "@/lib/ids";
 import { recordAudit } from "@/lib/audit";
+import { enqueueSync } from "@/lib/sync";
 import {
   DEFAULT_SERIAL_PADDING,
   DEFAULT_SERIAL_PREFIX,
@@ -31,7 +32,8 @@ import {
 } from "@/lib/serial";
 import { financialYearOf } from "@/lib/fy";
 import { optionalIntegerField } from "@/lib/form-schema";
-import { missingProfileFields } from "@/lib/entity-profile";
+import { isUnconfirmedValue, unconfirmedProfileFields } from "@/lib/entity-profile";
+import { MAX_SERIAL_LENGTH, serialFormatIssues } from "@/lib/compliance";
 import {
   describeBranch,
   isValidIfscFormat,
@@ -47,12 +49,18 @@ import {
  * after the GSTIN, the SWIFT code needs a call to the bank — and a form that
  * refuses to save until all of it is present just loses the half that was
  * already known. What a compliant invoice actually requires is enforced where it
- * matters instead: `missingProfileFields` gates PDF generation, and this form
- * surfaces the same list as a banner rather than as blocking field errors.
+ * matters instead: `unconfirmedProfileFields` reports what is still unfilled,
+ * and this form surfaces that list as a banner rather than as blocking field
+ * errors.
  *
  * Optional is not unvalidated. A value that is present but malformed — an email
  * without an `@`, twelve sequence digits — is still rejected, because that is a
  * typo rather than a deferral.
+ *
+ * Nothing here gates anything any more. A fresh database arrives with the
+ * particulars an invoice needs prefilled as "TO BE UPDATED", and a PDF generates
+ * whatever state they are in — so this form's banner is a reminder of what a
+ * document will go out saying, not a list of things standing in the way.
  */
 const schema = z.object({
   legalName: z.string().trim(),
@@ -62,6 +70,10 @@ const schema = z.object({
   pan: z.string().trim(),
   gstin: z.string().trim(),
   lutNumber: z.string().trim(),
+  state: z.string().trim(),
+  stateCode: z.string().trim(),
+  authorisedSignatory: z.string().trim(),
+  usTaxFormReference: z.string().trim(),
   bankName: z.string().trim(),
   bankAccountNumber: z.string().trim(),
   bankIfsc: z.string().trim().toUpperCase(),
@@ -103,16 +115,22 @@ export function EntityProfileForm({ profile }: { profile: EntityProfile }) {
     1
   );
 
+  // Rule 46(b) caps a serial at 16 characters. Warned about rather than
+  // enforced: a prefix is only a problem for invoices not yet raised, and
+  // refusing to save it would leave the user with no way to correct it.
+  const serialIssues = serialFormatIssues(serialPreview);
+
   // Read from the live form rather than the saved row, so the banner clears as
   // the gaps are typed in instead of only after a save.
-  const gaps = missingProfileFields({ ...profile, ...values } as EntityProfile);
+  const gaps = unconfirmedProfileFields({ ...profile, ...values } as EntityProfile);
 
   async function onSubmit(values: FormValues) {
     const parsed = schema.parse(values);
     const next: EntityProfile = { ...parsed, id: ENTITY_PROFILE_ID, updatedAt: nowIso() };
 
-    await db.transaction("rw", db.entityProfile, db.auditLog, async (tx) => {
+    await db.transaction("rw", db.entityProfile, db.auditLog, db.syncQueue, async (tx) => {
       await db.entityProfile.put(next);
+      await enqueueSync(tx, "entityProfile", next.id);
       await recordAudit(
         {
           actionType: "entity_profile_updated",
@@ -141,13 +159,13 @@ export function EntityProfileForm({ profile }: { profile: EntityProfile }) {
       */}
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" noValidate>
         {gaps.length > 0 && (
-          <Card className="border-status-overdue/30 bg-status-overdue-bg">
-            <CardContent className="flex gap-2 py-4 text-sm text-status-overdue">
+          <Card>
+            <CardContent className="text-muted-foreground flex gap-2 py-4 text-sm">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
               <p>
-                Save as much or as little as you like — but an invoice PDF cannot be generated
-                until <span className="font-medium">{gaps.join(", ")}</span>{" "}
-                {gaps.length === 1 ? "is" : "are"} filled in.
+                <span className="text-foreground font-medium">{gaps.join(", ")}</span>{" "}
+                {gaps.length === 1 ? "is" : "are"} still unconfirmed and will print on invoices as
+                shown. Nothing is blocked — save as much or as little as you like.
               </p>
             </CardContent>
           </Card>
@@ -186,6 +204,32 @@ export function EntityProfileForm({ profile }: { profile: EntityProfile }) {
               label="LUT number"
               className="sm:col-span-2"
               description="Letter of Undertaking reference, printed beside the zero-rated IGST disclaimer."
+            />
+            <TextField
+              form={form}
+              name="state"
+              label="State"
+              description="Your own State. A domestic invoice states the place of supply against it (Rule 46(n))."
+            />
+            <TextField
+              form={form}
+              name="stateCode"
+              label="State code"
+              placeholder="07"
+              description="The two-digit GST state code."
+            />
+            <TextField
+              form={form}
+              name="authorisedSignatory"
+              label="Authorised signatory"
+              description="Printed under the signature block. Rule 46(q) requires every invoice to be signed."
+            />
+            <TextField
+              form={form}
+              name="usTaxFormReference"
+              label="US withholding certificate"
+              placeholder="W-8BEN-E dated 14 Mar 2026"
+              description="Quoted on invoices to US clients. Without it a US payer may withhold 30% under Chapter 3."
             />
           </CardContent>
         </Card>
@@ -245,8 +289,21 @@ export function EntityProfileForm({ profile }: { profile: EntityProfile }) {
             />
             <p className="text-sm text-muted-foreground sm:col-span-3">
               Next invoice this financial year would be{" "}
-              <span className="font-mono font-medium text-foreground">{serialPreview}</span>
+              <span className="font-mono font-medium text-foreground">{serialPreview}</span>{" "}
+              <span className="text-xs">
+                ({serialPreview.length}/{MAX_SERIAL_LENGTH} characters)
+              </span>
             </p>
+            {serialIssues.length > 0 && (
+              <div className="flex gap-2 text-sm text-status-overdue sm:col-span-3">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                <div>
+                  {serialIssues.map((issue) => (
+                    <p key={issue}>This serial is {issue}</p>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -309,15 +366,17 @@ function IfscField({ form }: { form: UseFormReturn<FormValues> }) {
       if (lookup.status === "found") {
         const result = lookup;
         setState({ kind: "found", branch: result.branch });
-        // Fill the blanks only; anything already entered is left alone.
+        // Fill the unconfirmed ones only; anything actually entered is left
+        // alone. The seeded placeholder counts as unconfirmed — the directory
+        // overruling "TO BE UPDATED" is the whole point of the lookup.
         const current = form.getValues();
-        if (!String(current.bankName ?? "").trim() && result.branch.bank) {
+        if (isUnconfirmedValue(current.bankName) && result.branch.bank) {
           form.setValue("bankName", result.branch.bank, { shouldDirty: true });
         }
-        if (!String(current.bankBranch ?? "").trim() && result.branch.branch) {
+        if (isUnconfirmedValue(current.bankBranch) && result.branch.branch) {
           form.setValue("bankBranch", result.branch.branch, { shouldDirty: true });
         }
-        if (!String(current.bankSwift ?? "").trim() && result.branch.swift) {
+        if (isUnconfirmedValue(current.bankSwift) && result.branch.swift) {
           form.setValue("bankSwift", result.branch.swift, { shouldDirty: true });
         }
       } else if (lookup.status === "not-found") {
@@ -453,7 +512,16 @@ function toFormValues(profile: EntityProfile): FormValues {
   const { id, updatedAt, ...rest } = profile;
   void id;
   void updatedAt;
-  return rest;
+  // Fields added after a profile was first saved arrive undefined. An input
+  // handed undefined goes uncontrolled and drops the first character typed
+  // into it, so each one is anchored to "" here.
+  return {
+    ...rest,
+    state: rest.state ?? "",
+    stateCode: rest.stateCode ?? "",
+    authorisedSignatory: rest.authorisedSignatory ?? "",
+    usTaxFormReference: rest.usTaxFormReference ?? "",
+  };
 }
 
 function TextField({

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EntityProfileForm } from "@/components/settings/entity-profile-form";
 import { CurrencySettings } from "@/components/settings/currency-settings";
 import { BackupSettings } from "@/components/settings/backup-settings";
+import { SampleDataSettings } from "@/components/settings/sample-data-settings";
 import { getEntityProfile } from "@/lib/entity-profile";
 
 export default function SettingsPage() {
@@ -44,6 +45,7 @@ export default function SettingsPage() {
 
           <TabsContent value="backup" className="mt-4 space-y-4">
             <BackupSettings />
+            <SampleDataSettings />
           </TabsContent>
         </Tabs>
       </div>

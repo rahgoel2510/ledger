@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
 import type { EntityProfile } from "@/lib/types";
+import { enqueueSync } from "@/lib/sync";
 
 /**
- * Invoice serial allocation: `{prefix}/{FY}/{seq}`, e.g. RGHUF/INV/26-27/001.
+ * Invoice serial allocation: `{prefix}/{FY}/{seq}`, e.g. RGHUF/26-27/001.
  *
  * The sequence comes from a dedicated counter row, NOT from `max(sequence)` over
  * existing invoices. Deleting or voiding an invoice must never free its number
@@ -18,7 +19,13 @@ export function counterKeyForFy(financialYear: string): string {
  * is optional, so a serial still has to be well-formed for a profile that was
  * saved half-filled — `//26-27/1` is not a serial anyone can file against.
  */
-export const DEFAULT_SERIAL_PREFIX = "RGHUF/INV";
+/**
+ * `RGHUF` and not `RGHUF/INV`: Rule 46(b) caps a serial at 16 characters, and
+ * `RGHUF/INV/26-27/001` is 19. `RGHUF/26-27/001` is 15 and says the same thing.
+ * A prefix the user lengthens past the cap is flagged in Settings rather than
+ * silently truncated — renumbering issued invoices is never the right fix.
+ */
+export const DEFAULT_SERIAL_PREFIX = "RGHUF";
 export const DEFAULT_SERIAL_PADDING = 3;
 
 export function formatSerialNumber(
@@ -39,10 +46,11 @@ export function formatSerialNumber(
  */
 export async function allocateSequence(financialYear: string): Promise<number> {
   const key = counterKeyForFy(financialYear);
-  return db.transaction("rw", db.counters, async () => {
+  return db.transaction("rw", db.counters, db.syncQueue, async (tx) => {
     const current = await db.counters.get(key);
     const next = (current?.value ?? 0) + 1;
     await db.counters.put({ key, value: next });
+    await enqueueSync(tx, "counters", key);
     return next;
   });
 }

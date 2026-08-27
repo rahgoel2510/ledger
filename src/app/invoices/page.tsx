@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Plus, ScrollText, Search } from "lucide-react";
+import { Plus, ScrollText, Search, TriangleAlert } from "lucide-react";
 
 import { PageHeader } from "@/components/app-shell/page-header";
 import { MobileFab } from "@/components/app-shell/mobile-fab";
@@ -31,6 +31,7 @@ import {
 import { db } from "@/lib/db";
 import type { Invoice, InvoiceStatus, Remittance } from "@/lib/types";
 import { deriveInvoiceStatus } from "@/lib/invoices";
+import { duplicateSerialWarnings } from "@/lib/compliance";
 import { getEntityProfile } from "@/lib/entity-profile";
 import { formatMoney, invoiceTotalFcy } from "@/lib/money";
 import { formatFinancialYear, parseIsoDate, recentFinancialYears } from "@/lib/fy";
@@ -105,6 +106,7 @@ export default function InvoicesPage() {
 
   const loading = invoices === undefined || profile === undefined;
   const noClients = clientCount === 0;
+  const duplicateSerials = useMemo(() => duplicateSerialWarnings(invoices ?? []), [invoices]);
 
   return (
     <>
@@ -120,6 +122,26 @@ export default function InvoicesPage() {
       />
 
       <div className="space-y-4 p-4 sm:p-6">
+        {duplicateSerials.length > 0 && (
+          <div className="rounded-lg border border-[color:var(--status-overdue)]/40 bg-[color:var(--status-overdue)]/5 p-3">
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold tracking-wide">
+              <TriangleAlert className="size-3.5 text-[color:var(--status-overdue)]" />
+              DUPLICATE SERIAL NUMBERS
+            </h3>
+            <p className="text-muted-foreground mb-2 text-xs">
+              Two devices likely each created an invoice offline before syncing. Renumber one of each
+              pair below — the serial is what has to stay unique, not which invoice keeps it.
+            </p>
+            <ul className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed">
+              {duplicateSerials.map(({ serialNumber, invoiceIds }) => (
+                <li key={serialNumber} className="font-mono">
+                  {serialNumber} — {invoiceIds.length} invoices
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {noClients && (
           <Card>
             <CardContent className="py-4 text-sm text-muted-foreground">

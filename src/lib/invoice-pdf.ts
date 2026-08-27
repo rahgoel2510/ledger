@@ -1,7 +1,7 @@
 import type { EntityProfile, Invoice } from "@/lib/types";
 import { BASE_PATH } from "@/lib/env";
 import { recordAudit } from "@/lib/audit";
-import { missingProfileFields } from "@/lib/entity-profile";
+import { unconfirmedProfileFields } from "@/lib/entity-profile";
 
 /**
  * Client-side invoice PDF generation (module 1, US-2).
@@ -36,14 +36,18 @@ async function loadLogoDataUri(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Generation is never refused for an incomplete profile.
+ *
+ * It used to be: an unfilled particular threw and no PDF came out. That traded a
+ * document clearly marked as unfinished for no document at all, which is the
+ * worse of the two when the profile is filled in over weeks and a draft still
+ * needs to go out for review. The document now renders whatever the profile
+ * holds — a blank particular prints as an em dash, a placeholder prints as
+ * "TO BE UPDATED" — and `unconfirmedProfileFields` drives the reminder in the UI
+ * that says which ones those are.
+ */
 export async function buildInvoicePdfBlob(invoice: Invoice, profile: EntityProfile): Promise<Blob> {
-  const missing = missingProfileFields(profile);
-  if (missing.length > 0) {
-    throw new Error(
-      `Complete these in Settings before issuing an invoice: ${missing.join(", ")}.`
-    );
-  }
-
   const [{ pdf }, { InvoicePdfDocument }, logoDataUri] = await Promise.all([
     import("@react-pdf/renderer"),
     import("@/components/invoices/invoice-pdf-document"),
@@ -70,10 +74,18 @@ export async function downloadInvoicePdf(invoice: Invoice, profile: EntityProfil
     URL.revokeObjectURL(url);
   }
 
+  // Which particulars the document went out without is the part worth keeping.
+  // Nothing blocks the download, so the audit trail is the only place that stays
+  // true about what a given PDF actually carried.
+  const unconfirmed = unconfirmedProfileFields(profile);
   await recordAudit({
     actionType: "invoice_pdf_downloaded",
     entityType: "invoice",
     entityId: invoice.id,
-    summary: `${invoice.serialNumber} PDF downloaded`,
+    summary:
+      unconfirmed.length > 0
+        ? `${invoice.serialNumber} PDF downloaded with unconfirmed particulars: ${unconfirmed.join(", ")}`
+        : `${invoice.serialNumber} PDF downloaded`,
+    isManualOverride: unconfirmed.length > 0,
   });
 }

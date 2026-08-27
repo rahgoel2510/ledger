@@ -64,9 +64,17 @@ async function cacheFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response.ok) cache.put(request, response.clone());
-  return response;
+  try {
+    const response = await fetch(request);
+    if (response.ok) cache.put(request, response.clone());
+    return response;
+  } catch {
+    // An uncached asset with no network. There is nothing to serve in its place
+    // — a build's chunks are not interchangeable — but the rejection has to be
+    // answered: letting it propagate makes the FetchEvent itself fail, which
+    // surfaces as an unhandled TypeError and tells the user nothing about why.
+    return new Response("", { status: 504, statusText: "Offline and not cached" });
+  }
 }
 
 async function networkFirst(request) {

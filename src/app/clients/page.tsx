@@ -33,6 +33,8 @@ import {
 import { db } from "@/lib/db";
 import type { Client } from "@/lib/types";
 import { matchesClientSearch, removeClient, restoreClient } from "@/lib/clients";
+import { DEFAULT_CYCLE, describeCycle, isRecurring } from "@/lib/recurring";
+import { formatMoney } from "@/lib/money";
 
 const ALL_COUNTRIES = "__all__";
 
@@ -164,6 +166,17 @@ export default function ClientsPage() {
                         {client.archived && <Badge variant="secondary">Archived</Badge>}
                       </div>
                       <p className="text-sm text-muted-foreground">{client.country}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <Badge variant={client.placeOfSupply === "domestic" ? "secondary" : "outline"}>
+                          {client.placeOfSupply === "domestic" ? "Domestic supply" : "Export of services"}
+                        </Badge>
+                        <Badge variant="outline">
+                          {client.billing.model === "hourly"
+                            ? "Hourly"
+                            : describeCycle(client.billing.cycle ?? DEFAULT_CYCLE)}
+                        </Badge>
+                        {isRecurring(client) && <Badge variant="secondary">Auto-drafts</Badge>}
+                      </div>
                     </div>
                     <Badge variant="outline" className="font-mono shrink-0">
                       {client.defaultCurrency}
@@ -181,6 +194,23 @@ export default function ClientsPage() {
                       <div className="flex gap-2">
                         <dt className="shrink-0">Tax ID:</dt>
                         <dd className="truncate text-foreground">{client.taxId}</dd>
+                      </div>
+                    )}
+                    {client.billing.model === "hourly" && client.billing.hourlyRate !== undefined && (
+                      <div className="flex gap-2">
+                        <dt className="shrink-0">Rate:</dt>
+                        <dd className="truncate text-foreground">
+                          {formatMoney(client.billing.hourlyRate, client.defaultCurrency)} / hour
+                        </dd>
+                      </div>
+                    )}
+                    {client.billing.model === "fixed" && client.billing.fixedAmount !== undefined && (
+                      <div className="flex gap-2">
+                        <dt className="shrink-0">Retainer:</dt>
+                        <dd className="truncate text-foreground">
+                          {formatMoney(client.billing.fixedAmount, client.defaultCurrency)} /{" "}
+                          {describeCycle(client.billing.cycle ?? DEFAULT_CYCLE).toLowerCase()}
+                        </dd>
                       </div>
                     )}
                   </dl>

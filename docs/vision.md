@@ -12,7 +12,7 @@
 # Core Requirements
 
 ### 1. Invoicing Module
-- **Custom Serial Numbering:** Generate invoices with customizable, auto-incrementing serial structures (e.g., `RGHUF/INV/26-27/001`).
+- **Custom Serial Numbering:** Generate invoices with customizable, auto-incrementing serial structures (e.g., `RGHUF/26-27/001` — Rule 46(b) caps a serial at 16 characters).
 - **Foreign Client Support:** Issue invoices in USD, EUR, or other configured secondary foreign currencies.
 - **Client-side PDF Generation:** Download downloadable A4 Tax Invoices with one click, fully styled for print.
 - **IGST & Tax Disclaimers (Export of Services):**

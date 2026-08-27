@@ -1,3 +1,5 @@
+import zlib from "node:zlib";
+
 import { test as base, expect, type Page } from "@playwright/test";
 
 /**
@@ -16,6 +18,13 @@ export interface SeededProfile {
   legalName: string;
   address: string;
   gstin: string;
+  /** Rule 46(q). Part of `REQUIRED_PROFILE_FIELDS`, so PDF generation is gated on it. */
+  authorisedSignatory: string;
+  state: string;
+  stateCode: string;
+  lutNumber: string;
+  pan: string;
+  usTaxFormReference: string;
   bankName: string;
   bankAccountNumber: string;
   bankIfsc: string;
@@ -26,6 +35,12 @@ export const COMPLETE_PROFILE: SeededProfile = {
   legalName: "Rahul Goel HUF",
   address: "12 Nehru Place\nNew Delhi 110019\nIndia",
   gstin: "07AAAAA0000A1Z5",
+  authorisedSignatory: "Rahul Goel",
+  state: "Delhi",
+  stateCode: "07",
+  lutNumber: "AD070422000123X",
+  pan: "AAAAA0000A",
+  usTaxFormReference: "W-8BEN-E dated 2026-04-01",
   bankName: "HDFC Bank",
   bankAccountNumber: "50100123456789",
   bankIfsc: "HDFC0000123",
@@ -140,6 +155,14 @@ export async function completeEntityProfile(
   await page.getByLabel("Legal name").fill(profile.legalName);
   await page.getByLabel("Address").fill(profile.address);
   await page.getByLabel("GSTIN").fill(profile.gstin);
+  await page.getByLabel("PAN").fill(profile.pan);
+  await page.getByLabel("LUT number").fill(profile.lutNumber);
+  // Rule 46(q): without a signatory `missingProfileFields` gates every PDF, so
+  // any spec that reaches the download button needs this filled.
+  await page.getByLabel("Authorised signatory").fill(profile.authorisedSignatory);
+  await page.getByLabel("State", { exact: true }).fill(profile.state);
+  await page.getByLabel("State code").fill(profile.stateCode);
+  await page.getByLabel("US withholding certificate").fill(profile.usTaxFormReference);
   await page.getByLabel("Bank name").fill(profile.bankName);
   await page.getByLabel("Account number").fill(profile.bankAccountNumber);
   await page.getByLabel("IFSC code").fill(profile.bankIfsc);
@@ -154,8 +177,11 @@ export interface ClientSeed {
   country: string;
   currency?: string;
   billingAddress?: string;
+  /** Rule 46(o) — only printed on the PDF where it differs from the billing address. */
+  deliveryAddress?: string;
   taxId?: string;
   primaryContact?: string;
+  sacCode?: string;
 }
 
 /** Adds a client through the UI. Kept UI-driven so the form itself stays covered. */
@@ -174,6 +200,12 @@ export async function addClient(page: Page, client: ClientSeed): Promise<void> {
   if (client.primaryContact) await sheet.getByLabel("Primary contact").fill(client.primaryContact);
   if (client.taxId) await sheet.getByLabel("Tax ID").fill(client.taxId);
   if (client.billingAddress) await sheet.getByLabel("Billing address").fill(client.billingAddress);
+  if (client.deliveryAddress) {
+    await sheet.getByLabel("Address of delivery").fill(client.deliveryAddress);
+  }
+  // On the Details tab, not Billing: Rule 46(g) wants the accounting code on
+  // an export as well, so it sits outside the domestic-tax block.
+  if (client.sacCode) await sheet.getByLabel("SAC code").fill(client.sacCode);
 
   await sheet.getByRole("button", { name: "Add client" }).click();
   await expect(page.getByText(`${client.name} added.`)).toBeVisible();
@@ -190,6 +222,24 @@ export interface InvoiceSeed {
   currency?: string;
   /** Save as a draft instead of issuing straight away. */
   asDraft?: boolean;
+}
+
+/**
+ * Switches the line-item editor between date-wise hourly lines and flat amounts.
+ *
+ * The sheet opens on hourly, and picking a client re-applies whatever that client
+ * is billed on, so a spec that wants the flat "Qty / Rate" columns has to ask for
+ * them rather than rely on a default that a seeded client can move.
+ */
+export async function setLineItemMode(page: Page, mode: "hourly" | "fixed"): Promise<void> {
+  const sheet = page.getByRole("dialog");
+  await sheet
+    .getByRole("combobox")
+    .filter({ hasText: /Itemised by date|Fixed amounts/ })
+    .click();
+  await page
+    .getByRole("option", { name: mode === "hourly" ? "Itemised by date" : "Fixed amounts" })
+    .click();
 }
 
 /**
@@ -217,6 +267,11 @@ export async function addInvoice(page: Page, invoice: InvoiceSeed): Promise<stri
     await sheet.getByLabel("Currency").click();
     await page.getByRole("option", { name: new RegExp(`^${invoice.currency}\\b`) }).click();
   }
+  // Flat amounts, whatever the client is normally billed on: every spec that
+  // uses this helper predates hourly itemisation and reads the "Qty / Rate"
+  // labels. `phase2-engagements.spec.ts` drives the hourly editor directly.
+  await setLineItemMode(page, "fixed");
+
   if (invoice.invoiceDate) await sheet.getByLabel("Invoice date", { exact: true }).fill(invoice.invoiceDate);
   if (invoice.dueDate) await sheet.getByLabel("Due date", { exact: true }).fill(invoice.dueDate);
 
@@ -346,3 +401,81 @@ export const test = base.extend<{ ifscDirectory: void }>({
 });
 
 export { expect };
+
+/**
+ * Pulls readable text out of a generated PDF.
+ *
+ * @react-pdf writes one `TJ` per laid-out line, with the glyphs as hex strings
+ * split around kerning adjustments — e.g. `[<54> 120 <41> 0 <20494e56>] TJ` is
+ * one line reading " INV" after "TA". So the pieces inside one array join with
+ * nothing (they are a single line) while separate operators join with a space
+ * (they are separate lines). Getting that backwards would glue wrapped words
+ * together and fail a verbatim assertion for the wrong reason.
+ *
+ * The fonts in use are the standard single-byte ones, so a hex pair is one
+ * character. Cheaper than a PDF parser dependency for a few content checks.
+ */
+export function extractPdfText(pdf: Buffer): string {
+  const raw = pdf.toString("latin1");
+  const lines: string[] = [];
+
+  const decodeLiteral = (value: string) =>
+    value
+      .replace(/\\([()\\])/g, "$1")
+      .replace(/\\(\d{1,3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8)));
+
+  const decodeHex = (value: string) => {
+    const digits = value.replace(/[^0-9a-fA-F]/g, "");
+    let out = "";
+    for (let i = 0; i + 1 < digits.length; i += 2) {
+      out += String.fromCharCode(parseInt(digits.slice(i, i + 2), 16));
+    }
+    return out;
+  };
+
+  const streamPattern = /stream\r?\n?([\s\S]*?)endstream/g;
+  const operatorPattern = /\[([^\]]*)\]\s*TJ|\(((?:\\.|[^\\()])*)\)\s*Tj|<([0-9a-fA-F\s]*)>\s*Tj/g;
+  const piecePattern = /\(((?:\\.|[^\\()])*)\)|<([0-9a-fA-F\s]*)>/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = streamPattern.exec(raw)) !== null) {
+    let content = match[1];
+    try {
+      content = zlib.inflateSync(Buffer.from(content, "latin1")).toString("latin1");
+    } catch {
+      // Not a compressed stream (an image, say) — fall through to the raw bytes.
+    }
+
+    for (const op of content.matchAll(operatorPattern)) {
+      if (op[1] !== undefined) {
+        let line = "";
+        for (const piece of op[1].matchAll(piecePattern)) {
+          line += piece[1] !== undefined ? decodeLiteral(piece[1]) : decodeHex(piece[2]);
+        }
+        lines.push(line);
+      } else if (op[2] !== undefined) {
+        lines.push(decodeLiteral(op[2]));
+      } else {
+        lines.push(decodeHex(op[3]));
+      }
+    }
+  }
+
+  return lines.join(" ");
+}
+
+/** Collapses whitespace so an assertion isn't sensitive to where a line wrapped. */
+export function flatten(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export async function downloadPdf(page: Page): Promise<Buffer> {
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download PDF" }).click();
+  const download = await downloadPromise;
+
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}

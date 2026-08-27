@@ -7,6 +7,8 @@ import { AppSidebar } from "@/components/app-shell/app-sidebar";
 import { TopBar } from "@/components/app-shell/top-bar";
 import { MobileBottomNav } from "@/components/app-shell/mobile-bottom-nav";
 import { ServiceWorkerRegister } from "@/components/service-worker-register";
+import { RecurringDraftsRunner } from "@/components/recurring-drafts-runner";
+import { SyncProvider } from "@/components/app-shell/sync-provider";
 import { AppBootSplash } from "@/components/app-boot-splash";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -57,6 +59,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </SidebarProvider>
             <MobileBottomNav />
             <ServiceWorkerRegister />
+            <RecurringDraftsRunner />
+            <SyncProvider />
             <Toaster position="top-center" richColors closeButton />
           </TooltipProvider>
         </AppBootSplash>

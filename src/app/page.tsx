@@ -15,7 +15,7 @@ import { BASE_CURRENCY_CODE } from "@/lib/currencies";
 import { deriveInvoiceStatus } from "@/lib/invoices";
 import { formatMoney, formatSignedMoney, invoiceTotalFcy, round2 } from "@/lib/money";
 import { financialYearOf, parseIsoDate } from "@/lib/fy";
-import { getEntityProfile, missingProfileFields } from "@/lib/entity-profile";
+import { getEntityProfile, unconfirmedProfileFields } from "@/lib/entity-profile";
 
 /**
  * Dashboard metrics are derived from the same helpers the detail views use
@@ -75,7 +75,7 @@ function useDashboardData() {
       realizedThisFy,
       clientCount,
       overdue,
-      profileGaps: missingProfileFields(profile),
+      profileGaps: unconfirmedProfileFields(profile),
     };
   }, []);
 }
@@ -89,14 +89,16 @@ export default function DashboardPage() {
 
       <div className="space-y-4 p-4 sm:p-6">
         {data && data.profileGaps.length > 0 && (
-          <Card className="border-status-overdue/30 bg-status-overdue-bg">
+          <Card>
             <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex gap-2 text-sm text-status-overdue">
+              <div className="text-muted-foreground flex gap-2 text-sm">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                 <p>
-                  Invoice PDFs need your entity and bank details first —{" "}
-                  <span className="font-medium">{data.profileGaps.join(", ")}</span> are still
-                  blank.
+                  Invoices will print with{" "}
+                  <span className="text-foreground font-medium">
+                    {data.profileGaps.join(", ")}
+                  </span>{" "}
+                  unconfirmed. PDFs still generate — correct these when you have them.
                 </p>
               </div>
               <Button asChild size="sm" variant="outline" className="shrink-0">

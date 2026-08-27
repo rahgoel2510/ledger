@@ -4,7 +4,7 @@
 Create, manage, and PDF-export foreign-currency export-of-services invoices compliant with LUT/zero-rated IGST rules.
 
 ## Key concepts
-- Serial number: `RGHUF/INV/{FY}/{seq}` — sequential within financial year, never reused (see CLAUDE.md).
+- Serial number: `{prefix}/{FY}/{seq}`, default `RGHUF/26-27/001` — sequential within financial year, never reused, and at most 16 characters per Rule 46(b) (see CLAUDE.md).
 - Status lifecycle: Draft → Sent → Paid / Overdue.
 - FX rate is captured at invoice-date and frozen on the invoice record — reused later for forex realization (module 3), never recomputed.
 - Currency list is user-configurable, not hardcoded (default USD/EUR).
@@ -19,7 +19,7 @@ Create, manage, and PDF-export foreign-currency export-of-services invoices comp
 **US-1**: As Rahul, I want to create a new invoice for a foreign client in their currency so I can bill for services rendered.
 - AC:
   - Selecting a client pre-fills currency from the client's default; currency remains editable to any configured currency.
-  - Serial number auto-generates as `RGHUF/INV/{FY}/{seq}`; sequence never reused, even if an invoice is later deleted/voided.
+  - Serial number auto-generates as `{prefix}/{FY}/{seq}` (default `RGHUF/26-27/001`); sequence never reused, even if an invoice is later deleted/voided.
   - Invoice-date FX rate is entered/fetched and stored immutably on the invoice at creation time.
   - Cannot save without: client, currency, at least one line item with amount, invoice date, due date.
   - New invoice defaults to Draft status.

@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import type {
   AuditLogEntry,
   Client,
+  ClientDocument,
   Counter,
   Currency,
   EntityProfile,
@@ -25,7 +26,19 @@ import { recordAudit } from "@/lib/audit";
  * account, and no free-tier budget.
  */
 
-export const BACKUP_FORMAT_VERSION = 1;
+/**
+ * 2 adds `clientDocuments`. A version-1 file still imports — it simply carries no
+ * documents — but a version-2 file cannot be read by an older build, which is
+ * what `parseBackup` refuses on.
+ */
+export const BACKUP_FORMAT_VERSION = 2;
+
+/**
+ * A client document with its bytes base64-encoded, because JSON cannot hold a
+ * Blob. This is why documents are size-capped on upload: they inflate by a third
+ * here, and this file is the only disaster-recovery path there is.
+ */
+export type SerializedClientDocument = Omit<ClientDocument, "file"> & { fileBase64: string };
 
 export interface BackupFile {
   format: "vrikshafx-backup";
@@ -36,6 +49,7 @@ export interface BackupFile {
     entityProfile: EntityProfile[];
     counters: Counter[];
     clients: Client[];
+    clientDocuments?: SerializedClientDocument[];
     invoices: Invoice[];
     remittances: Remittance[];
     expenseCategories: ExpenseCategory[];
@@ -51,6 +65,7 @@ export async function exportBackup(): Promise<BackupFile> {
     entityProfile,
     counters,
     clients,
+    clientDocuments,
     invoices,
     remittances,
     expenseCategories,
@@ -62,6 +77,7 @@ export async function exportBackup(): Promise<BackupFile> {
     db.entityProfile.toArray(),
     db.counters.toArray(),
     db.clients.toArray(),
+    db.clientDocuments.toArray(),
     db.invoices.toArray(),
     db.remittances.toArray(),
     db.expenseCategories.toArray(),
@@ -79,6 +95,7 @@ export async function exportBackup(): Promise<BackupFile> {
       entityProfile,
       counters,
       clients,
+      clientDocuments: await Promise.all(clientDocuments.map(serializeDocument)),
       invoices,
       remittances,
       expenseCategories,
@@ -87,6 +104,37 @@ export async function exportBackup(): Promise<BackupFile> {
       auditLog,
     },
   };
+}
+
+async function serializeDocument(document: ClientDocument): Promise<SerializedClientDocument> {
+  const { file, ...rest } = document;
+  return { ...rest, fileBase64: await blobToBase64(file) };
+}
+
+function deserializeDocument(document: SerializedClientDocument): ClientDocument {
+  const { fileBase64, ...rest } = document;
+  return { ...rest, file: base64ToBlob(fileBase64, rest.mimeType) };
+}
+
+/**
+ * Chunked rather than `String.fromCharCode(...bytes)`: spreading a multi-megabyte
+ * array into a call blows the argument limit and throws.
+ */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function base64ToBlob(base64: string, mimeType: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
 }
 
 export function backupFileName(exportedAt = nowIso()): string {
@@ -134,6 +182,7 @@ export async function importBackup(backup: BackupFile): Promise<ImportSummary> {
       db.entityProfile,
       db.counters,
       db.clients,
+      db.clientDocuments,
       db.invoices,
       db.remittances,
       db.expenseCategories,
@@ -147,6 +196,7 @@ export async function importBackup(backup: BackupFile): Promise<ImportSummary> {
         [db.entityProfile, data.entityProfile, "entityProfile"],
         [db.counters, data.counters, "counters"],
         [db.clients, data.clients, "clients"],
+        [db.clientDocuments, (data.clientDocuments ?? []).map(deserializeDocument), "clientDocuments"],
         [db.invoices, data.invoices, "invoices"],
         [db.remittances, data.remittances, "remittances"],
         [db.expenseCategories, data.expenseCategories, "expenseCategories"],

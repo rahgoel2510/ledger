@@ -2,6 +2,7 @@ import type { Transaction } from "dexie";
 import { db } from "@/lib/db";
 import type { AuditActionType, AuditEntityType, AuditLogEntry } from "@/lib/types";
 import { newId, nowIso } from "@/lib/ids";
+import { enqueueSync } from "@/lib/sync";
 
 /**
  * Audit trail writer (module 8). Entries are append-only: nothing in the app
@@ -36,6 +37,7 @@ export async function recordAudit(
   };
   const table = tx ? tx.table<AuditLogEntry>("auditLog") : db.auditLog;
   await table.add(entry);
+  await enqueueSync(tx, "auditLog", entry.id);
 }
 
 export const AUDIT_ACTION_LABELS: Record<AuditActionType, string> = {
@@ -46,9 +48,12 @@ export const AUDIT_ACTION_LABELS: Record<AuditActionType, string> = {
   invoice_status_overridden: "Invoice status overridden",
   remittance_recorded: "Remittance recorded",
   invoice_pdf_downloaded: "Invoice PDF downloaded",
+  invoice_auto_drafted: "Recurring invoice drafted",
   client_created: "Client created",
   client_updated: "Client updated",
   client_archived: "Client archived",
+  client_document_uploaded: "Client document uploaded",
+  client_document_deleted: "Client document deleted",
   expense_recorded: "Expense recorded",
   entity_profile_updated: "Entity profile updated",
   currency_settings_changed: "Currency settings changed",

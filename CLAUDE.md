@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `docs/vision.md` is the authoritative requirements doc — read it for full detail; this file distills what a coding session needs without re-deriving it. Per-module specs and acceptance criteria live in `docs/modules/`.
 
-**Shipped:** module 0 (PWA shell/offline), module 1 (invoicing + PDF), module 5 (client directory), settings (entity profile, currencies, local backup/restore), live dashboard metrics, and the GitHub Pages deploy workflow.
+**Shipped:** module 0 (PWA shell/offline), module 1 (invoicing + PDF), module 5 (client directory), settings (entity profile, currencies, local backup/restore), live dashboard metrics, the GitHub Pages deploy workflow, and multi-device sync (Firebase Firestore + Auth — see "Multi-device sync" below; this is additional to the original 8 modules, not one of them).
 
-**Not built yet:** modules 2 (GCS sync), 3 (remittances/forex), 4 (ledger reports), 6 (AR aging), 7 (expenses), 8 (audit-log view). The pages for these render `PageStub`. The domain layer they need already exists and is wired — see "Shared domain layer" below — so these are UI-and-queries work, not foundations work.
+**Not built yet:** module 2 (GCS file backup — PDFs and `clientDocuments` blobs; distinct from the Firestore data sync, which is done), module 3 (remittances/forex), module 4 (ledger reports), module 6 (AR aging), module 7 (expenses), module 8 (audit-log view). The pages for these render `PageStub`. The domain layer they need already exists and is wired — see "Shared domain layer" below — so these are UI-and-queries work, not foundations work.
 
 Commands: `npm run dev`, `npm run build` (static export to `out/`), `npm run lint`, `npx tsc --noEmit`, `npm run test:e2e` (Playwright; `test:e2e:ui` to debug, `test:e2e:report` for the last HTML report).
 
@@ -36,7 +36,7 @@ Tests run serially (`workers: 1`): they share one origin's IndexedDB, and Playwr
 - **Frontend:** Next.js (App Router, TypeScript), static export (`output: 'export'`) — deployed to **GitHub Pages**. No Node server, API routes, or SSR at runtime; anything server-shaped won't work in production. (Open to a different framework if it's clearly better suited to static-export + PWA, but default to Next.js since the project is already scoped around it — don't switch without a concrete reason.)
 - **PWA:** web app manifest + service worker for installability and offline app-shell caching. Must work with static export (no framework feature that assumes a server).
 - **Styling/UI:** Tailwind CSS + Shadcn UI, `lucide-react` icons.
-- **Local persistence:** IndexedDB (via `dexie.js`) — the app's source of truth; must be fully usable offline / with cloud sync disabled.
+- **Local persistence:** IndexedDB (via `dexie.js`) — every read/write in `src/lib/` goes through it exactly as before; it is what makes the app fully usable offline / signed out. See "Multi-device sync" below for what sits on top of it.
 - **Cloud storage:** Google Cloud Storage, used entirely within the **free tier (~5GB, $0 billing)** — see Storage rules below. Client-side only; no backend service holds credentials.
 - **PDF generation:** `@react-pdf/renderer` or `jspdf` + `html2canvas`, entirely client-side.
 - **Deployment:** GitHub Actions workflow builds the static export and publishes to GitHub Pages on push.
@@ -60,6 +60,19 @@ module.exports = nextConfig;
 - Stay inside the always-free tier: keep the bucket in a `US-*` free-tier-eligible region/class, avoid unnecessary re-uploads/re-downloads (egress and Class A/B operations both have free-tier caps), and batch or skip uploads a user hasn't asked for rather than syncing eagerly.
 - Folder convention: `Rahul Goel HUF/Invoices/FY26-27/` (financial-year-scoped, matching invoice serial numbering).
 - Cloud sync is a **backup**, not a dependency — IndexedDB is the source of truth; every feature must degrade gracefully (and stay fully functional) if the user is offline, unauthenticated, or the free tier is exhausted.
+- This bucket backs up PDF/document *files*. It is separate from the Firestore data sync below, and is not yet built (see "Not built yet" above).
+
+## Multi-device sync (Firebase Firestore + Auth)
+
+Dexie stays primary — every mutating function in `src/lib/` still writes to IndexedDB first, inside its existing transaction, exactly as documented above. Firestore sits on top as an optional sync layer, never a replacement: the app must stay fully functional signed out, same principle as GCS.
+
+- **Outbox pattern**, in `src/lib/sync.ts`. Every mutating function calls `enqueueSync(tx, table, docId)` right after its Dexie write (same calling convention as `recordAudit(input, tx)` — pass the same `tx`, add the table to the `db.transaction(...)` call). This upserts a row into the local `syncQueue` table; a drain loop later re-reads the *current* Dexie row for that id and `setDoc`s it to Firestore at `users/{uid}/{table}/{docId}` (or `deleteDoc`s if the row is gone locally). `recordAudit` itself calls `enqueueSync` for the `auditLog` table, so the whole audit trail syncs for free without every call site needing to know that.
+- **Pull** is a `onSnapshot` listener per table, started on sign-in (`startSyncEngine` in `sync.ts`, driven by `src/components/app-shell/sync-provider.tsx`). Firestore's `doc.metadata.hasPendingWrites` is what prevents push→pull feedback loops — a change still `hasPendingWrites` is an echo of this device's own not-yet-acknowledged push, and is skipped.
+- **Synced tables:** `SYNCED_TABLES` in `types.ts` — everything shipped today (`currencies`, `entityProfile`, `clients`, `clientDocuments`, `invoices`, `ledgerEntries`, `auditLog`, `counters`). `remittances`/`expenseEntries` aren't synced because they have no write path yet; wire up the same `enqueueSync` call when those modules get built.
+- **`clientDocuments` syncs metadata only** — its `file` Blob is stripped before every push (Firestore documents cap out around 1MiB and have no Blob type). A brand-new document synced from another device has no local bytes yet and is deliberately left out of the local table rather than materialized with a fake empty file; actual cross-device file transport is the GCS piece above, not yet built.
+- **`counters` merges as `max(local, remote)`** on pull, not last-write-wins — it's `serial.ts`'s monotonic invoice-sequence counter, and overwriting a higher local value with a lower remote one would let the same serial be issued twice.
+- **Accepted risk:** two devices allocating an invoice serial while both are offline can still collide before either syncs (Dexie's local transaction only serializes `allocateSequence` on-device). Not blocked — invoice creation stays instant offline everywhere else in the app, and duplicate serials are rare enough at this volume that blocking would cost more than it prevents. `duplicateSerialWarnings()` in `compliance.ts` flags any collision as a banner on the Invoices page once it syncs, same "warn, don't block" pattern as every other compliance check.
+- **Env vars** (build-time, static export — see `src/lib/firebase.ts`): `NEXT_PUBLIC_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID`. Not secrets — they identify the Firebase project publicly; access control is Firebase Auth + `firestore.rules` (repo root), which locks all reads/writes to one hardcoded owner UID. Unset in dev/CI is fine: `firebaseConfigured` in `firebase.ts` goes false and sync is silently inert.
 
 ## Tax scope boundary (explicit decision — do not expand without asking)
 
@@ -81,8 +94,9 @@ Tax computation is the CA's job; this app's job is to hand them accurate, struct
 
 Every module goes through these rather than touching Dexie directly. They encode rules that must not be re-implemented per page:
 
-- `db.ts` — Dexie schema, currently at **version 2**. Adding a table or field means a new `version(n).stores(...).upgrade(...)`; `populate` only fires for a brand-new database, so an upgrade path must seed anything new itself.
+- `db.ts` — Dexie schema, currently at **version 5**. Adding a table or field means a new `version(n).stores(...).upgrade(...)`; `populate` only fires for a brand-new database, so an upgrade path must seed anything new itself.
 - `types.ts` — all domain types. Note `StoredInvoiceStatus` (draft/sent/paid) vs `InvoiceStatus` (adds "overdue"): overdue is derived on read, never stored.
+- `firebase.ts` / `sync.ts` — multi-device sync, see "Multi-device sync" above. `sync.ts`'s `enqueueSync(tx, table, docId)` is the one line every mutating function in this list adds, right after its Dexie write, alongside its `recordAudit` call.
 - `entity-profile.ts` — the HUF's own particulars (bank wire block, GSTIN, LUT), a singleton row. `missingProfileFields()` gates PDF generation; invoicing UI surfaces the gaps rather than rendering blanks. **Every field on the Settings form is optional to save** — the profile is filled in over several sittings, so nothing there blocks a save. Compliance is enforced at the PDF instead, and Settings shows the same gap list as a banner. "Optional" still means validated: a malformed value present in a field is rejected (the form carries `noValidate`, so zod's messages are the only ones — the browser's native `type="email"` check would otherwise block submit before the resolver runs).
 - `ifsc.ts` — IFSC → bank/branch lookup against `ifsc.razorpay.com` (public, keyless). The **only** outbound call the app makes; it sends a branch code and nothing else. Returns a result union rather than throwing, because offline/404/outage all end the same way — the user types the branch in. Results cache to localStorage, deliberately not Dexie: public reference data about someone else's bank does not belong in the books or the backup file.
 - `serial.ts` — invoice serial allocation from a per-FY counter row, **not** `max(sequence)+1`. A deleted invoice's number is never reissued; gaps are the correct outcome.
@@ -96,6 +110,8 @@ Every module goes through these rather than touching Dexie directly. They encode
 
 Forms use react-hook-form + zod. `src/components/ui/form.tsx` is hand-written — the `radix-nova` shadcn style does not ship a `form` component, so `npx shadcn add form` is a no-op here.
 
+`src/components/ui/select.tsx` carries a deliberate patch on top of the generated component: `Select` swallows `onValueChange("")`. Radix mirrors the value into a hidden native `<select>` for form bubbling, and that select only holds options for `SelectItem`s that have mounted — which never happens until the dropdown is first opened. So a value set in code (picking a client adopts their currency) lands on a native select with no matching option, falls to `""`, and echoes a change event back that wipes the field. Radix forbids an item with an empty value, so `""` is only ever that echo. Removing the guard silently breaks every programmatic `setValue` on a Select-bound field — the symptom is a combobox that reads "Select" and a form that will not submit.
+
 ## Domain rules (non-obvious — don't re-derive these)
 
 Tax/legal requirements specific to this entity's export-of-services filing:
@@ -103,7 +119,7 @@ Tax/legal requirements specific to this entity's export-of-services filing:
 - **Zero-rated IGST:** invoices are for export of services under a Letter of Undertaking (LUT), IGST Act Section 16 — IGST is always 0%, and every invoice PDF must carry this exact disclaimer verbatim:
   > "SUPPLY MEANT FOR EXPORT OF SERVICES UNDER LETTER OF UNDERTAKING (LUT) WITHOUT PAYMENT OF INTEGRATED TAX (IGST). REMITTANCE TO BE CREDITED IN FOREIGN CURRENCY TO RAHUL GOEL HUF BANK ACCOUNT."
 - Invoice PDFs must show HUF Bank Name, Account Number, IFSC, and SWIFT/BIC for international wire transfers.
-- Serial numbers follow `RGHUF/INV/{FY}/{seq}` (e.g. `RGHUF/INV/26-27/001`) — financial-year-based, auto-incrementing, customizable structure.
+- Serial numbers follow `{prefix}/{FY}/{seq}`, defaulting to `RGHUF/26-27/001` — financial-year-based, auto-incrementing, customizable structure. The prefix is the entity alone, not `RGHUF/INV`: **Rule 46(b) caps a serial at 16 characters** and permits only alphanumerics with `-` and `/`, and `RGHUF/INV/26-27/001` is 19. `serialFormatIssues()` in `compliance.ts` is the check; Settings warns rather than blocks, since the numbering is the user's to choose.
 - **Realized forex gain/loss formula** — the core calculation the reports module is built around:
   ```
   Realized Forex Gain/Loss = INR Credited − (FCY Received × Invoice Date FX Rate) − Bank Charges

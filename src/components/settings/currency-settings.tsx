@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { db } from "@/lib/db";
 import { BASE_CURRENCY_CODE } from "@/lib/currencies";
 import { recordAudit } from "@/lib/audit";
+import { enqueueSync } from "@/lib/sync";
 
 /**
  * Currency list management (module 1, US-4). Deactivating never deletes: a
@@ -29,8 +30,9 @@ export function CurrencySettings() {
 
   async function toggleActive(currencyCode: string, active: boolean) {
     if (currencyCode === BASE_CURRENCY_CODE) return;
-    await db.transaction("rw", db.currencies, db.auditLog, async (tx) => {
+    await db.transaction("rw", db.currencies, db.auditLog, db.syncQueue, async (tx) => {
       await db.currencies.update(currencyCode, { active });
+      await enqueueSync(tx, "currencies", currencyCode);
       await recordAudit(
         {
           actionType: "currency_settings_changed",
@@ -54,7 +56,7 @@ export function CurrencySettings() {
       return;
     }
 
-    await db.transaction("rw", db.currencies, db.auditLog, async (tx) => {
+    await db.transaction("rw", db.currencies, db.auditLog, db.syncQueue, async (tx) => {
       await db.currencies.add({
         code: normalized,
         name: name.trim(),
@@ -62,6 +64,7 @@ export function CurrencySettings() {
         isBase: false,
         active: true,
       });
+      await enqueueSync(tx, "currencies", normalized);
       await recordAudit(
         {
           actionType: "currency_settings_changed",

@@ -20,8 +20,8 @@ test.describe("entity profile", () => {
     await page.goto("/settings");
 
     // A profile is assembled over weeks — the LUT number and SWIFT code arrive
-    // long after the name does. Every field is optional to save; what a
-    // compliant invoice needs is enforced at PDF generation instead.
+    // long after the name does. Every field is optional to save, and nothing
+    // downstream is blocked by what is still unfilled.
     await page.getByLabel("Legal name").fill("Rahul Goel HUF");
     await page.getByLabel("PAN").fill("AAAAA0000A");
     await page.getByRole("button", { name: "Save profile" }).click();
@@ -34,21 +34,40 @@ test.describe("entity profile", () => {
     );
     expect(profile[0].legalName).toBe("Rahul Goel HUF");
     expect(profile[0].pan).toBe("AAAAA0000A");
+    // Untouched, so it keeps the placeholder the database was seeded with.
+    expect(profile[0].gstin).toBe("TO BE UPDATED");
+  });
+
+  test("keeps a particular the user deliberately cleared", async ({ page }) => {
+    await page.goto("/settings");
+
+    // The seeded placeholder must be erasable. It is filled in once, on the
+    // upgrade that introduced it — so a field cleared by hand has to stay
+    // cleared, or the app would argue with the user every launch.
+    await page.getByLabel("GSTIN").fill("");
+    await page.getByRole("button", { name: "Save profile" }).click();
+    await expect(page.getByText("Entity profile saved.")).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByLabel("GSTIN")).toHaveValue("");
+
+    const profile = await readTable<{ gstin: string }>(page, "entityProfile");
     expect(profile[0].gstin).toBe("");
   });
 
-  test("names what is still missing before an invoice can be issued", async ({ page }) => {
+  test("names what is still unconfirmed without blocking anything", async ({ page }) => {
     await page.goto("/settings");
 
-    // Guidance, not a blocker — the save button stays live throughout.
-    const banner = page.getByText(/an invoice PDF cannot be generated until/);
+    // Guidance, not a blocker — the save button stays live throughout, and the
+    // banner names the particulars an invoice would print unconfirmed.
+    const banner = page.getByText(/still unconfirmed and will print on invoices/);
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("GSTIN");
     await expect(banner).toContainText("SWIFT/BIC code");
     await expect(page.getByRole("button", { name: "Save profile" })).toBeEnabled();
 
     await completeEntityProfile(page);
-    await expect(page.getByText(/an invoice PDF cannot be generated until/)).toBeHidden();
+    await expect(page.getByText(/still unconfirmed and will print on invoices/)).toBeHidden();
   });
 
   test("still rejects a malformed value in an optional field", async ({ page }) => {
@@ -74,7 +93,7 @@ test.describe("entity profile", () => {
     await page.getByLabel("Sequence digits").fill("");
 
     // Blank numbering settings must not yield "//26-27/1".
-    await expect(page.getByText(/RGHUF\/INV\/\d{2}-\d{2}\/001/)).toBeVisible();
+    await expect(page.getByText(/RGHUF\/\d{2}-\d{2}\/001/)).toBeVisible();
 
     await page.getByRole("button", { name: "Save profile" }).click();
     await expect(page.getByText("Entity profile saved.")).toBeVisible();
@@ -101,18 +120,23 @@ test.describe("entity profile", () => {
     await page.getByLabel("Sequence digits").fill("4");
 
     await expect(page.getByText(/RGHUF\/INV\/\d{2}-\d{2}\/0001/)).toBeVisible();
+
+    // That serial is 20 characters, and Rule 46(b) allows 16. The preview
+    // still renders it -- the numbering is the user's to choose -- but it
+    // says so, which is the only place the length is visible before a
+    // number has been issued against it.
+    await expect(page.getByText(/Rule 46\(b\) allows at most 16/)).toBeVisible();
   });
 
-  test("warns on the dashboard while the profile is incomplete", async ({ page }) => {
+  test("reminds on the dashboard while particulars are unconfirmed", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByText(/Invoice PDFs need your entity and bank details first/)).toBeVisible();
+    await expect(page.getByText(/Invoices will print with/)).toBeVisible();
+    await expect(page.getByText(/PDFs still generate/)).toBeVisible();
 
     await completeEntityProfile(page);
 
     await page.goto("/");
-    await expect(
-      page.getByText(/Invoice PDFs need your entity and bank details first/)
-    ).toBeHidden();
+    await expect(page.getByText(/Invoices will print with/)).toBeHidden();
   });
 });
 
@@ -189,7 +213,8 @@ test.describe("IFSC branch lookup", () => {
     await page.getByLabel("IFSC code").fill("ZZZZ0999999");
 
     await expect(page.getByText(/No branch found for this IFSC/)).toBeVisible();
-    await expect(page.getByLabel("Bank name")).toHaveValue("");
+    // Nothing to fill from, so the seeded placeholder is left standing.
+    await expect(page.getByLabel("Bank name")).toHaveValue("TO BE UPDATED");
   });
 
   test("does not call the directory for a half-typed code", async ({ page }) => {
