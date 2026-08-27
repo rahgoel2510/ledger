@@ -22,6 +22,8 @@ Tests run serially (`workers: 1`): they share one origin's IndexedDB, and Playwr
 
 **One-time manual step:** GitHub Pages must be set to "GitHub Actions" as its source under the repo's Settings → Pages before `.github/workflows/deploy.yml` can publish.
 
+**Branching:** `main` is the integration branch — PRs merge there, with no automated checks of its own. `prod` is what's actually live: `sync-prod.yml` mirrors every push from `main` onto `prod` automatically (no gate, no review step in between), and that push to `prod` is what triggers `deploy.yml` — lint, types, the full E2E suite, then build and publish. So the only place CI runs is right before a deploy, on `prod`, not on `main` or on PRs.
+
 **No subagents for this project.** Do the work directly (with skills for repeatable procedures like scaffolding/deploying) rather than spawning `.claude/agents`. This is a single-tenant personal app, not something that benefits from splitting into parallel agent-owned modules.
 
 ## Project overview

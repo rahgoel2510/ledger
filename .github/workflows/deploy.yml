@@ -1,9 +1,11 @@
 name: CI & Deploy to GitHub Pages
 
+# `prod` is what's actually live — every push here runs the full suite and,
+# if it passes, publishes. `main` has no gate of its own; it's mirrored onto
+# `prod` automatically by sync-prod.yml, so this is the only place checks run.
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [prod]
   workflow_dispatch:
 
 # Allow the deploy-pages action to publish, and let it read the repo's OIDC token.
@@ -94,8 +96,6 @@ jobs:
 
   deploy:
     needs: build
-    # Pull requests are verified and built, but only main publishes.
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
