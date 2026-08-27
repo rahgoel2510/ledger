@@ -36,6 +36,12 @@ jobs:
 
       - run: npm run lint
 
+      # `layout.tsx` etc. use Next's generated route-prop types (e.g.
+      # `LayoutProps<"/">`), which only exist once something creates
+      # `.next/types` — normally a side effect of `next dev`/`next build`.
+      # A fresh CI checkout has neither yet, so tsc needs this run first.
+      - run: npx next typegen
+
       - run: npx tsc --noEmit
 
       - run: npx playwright install --with-deps chromium
