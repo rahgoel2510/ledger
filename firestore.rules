@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// VrikshaFX is single-tenant — Rahul Goel HUF's own books. This locks every
+// read/write to exactly one Google account, not just "any authenticated
+// user", as defense in depth beyond the `uid` path match alone.
+//
+// Deploy: paste this into Firebase console -> Firestore Database -> Rules,
+// or `firebase deploy --only firestore:rules` if you have the CLI set up.
+//
+// Replace <OWNER_UID> below with the UID shown under Authentication -> Users
+// after your first sign-in.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{collection}/{docId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == uid
+        && request.auth.uid == "<OWNER_UID>";
+    }
+  }
+}

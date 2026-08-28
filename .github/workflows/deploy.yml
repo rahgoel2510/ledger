@@ -1,0 +1,105 @@
+name: CI & Deploy to GitHub Pages
+
+# `prod` is what's actually live — every push here runs the full suite and,
+# if it passes, publishes. `main` has no gate of its own; it's mirrored onto
+# `prod` automatically by sync-prod.yml, so this is the only place checks run.
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+
+# Allow the deploy-pages action to publish, and let it read the repo's OIDC token.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; queue instead of cancelling, so a merged commit
+# always ends up published rather than being dropped by a later push.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Gate on lint, types, and the full E2E suite. Nothing reaches Pages without
+  # these passing — a broken invoice PDF or serial allocation is not something to
+  # discover from the live site.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      # `layout.tsx` etc. use Next's generated route-prop types (e.g.
+      # `LayoutProps<"/">`), which only exist once something creates
+      # `.next/types` — normally a side effect of `next dev`/`next build`.
+      # A fresh CI checkout has neither yet, so tsc needs this run first.
+      - run: npx next typegen
+
+      - run: npx tsc --noEmit
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # NODE_ENV=production is what switches on the /vrikshafx basePath in
+      # next.config.js. `next build` sets it, but making it explicit keeps the
+      # asset paths from silently reverting to root-relative and 404-ing.
+      #
+      # The Firebase values are safe to expose (they identify the project, not
+      # a secret — see src/lib/firebase.ts) but still come from repo secrets so
+      # they aren't hardcoded here per-environment. Sync is skipped entirely
+      # (see `firebaseConfigured`) if these are ever unset.
+      - run: npm run build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

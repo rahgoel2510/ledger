@@ -1,0 +1,22 @@
+name: Sync prod with main
+
+# prod has no independent history — it always mirrors main's tip exactly, with
+# no gate in between. This is what triggers CI & Deploy to GitHub Pages
+# (deploy.yml), which is the only place checks run. Creates the prod branch on
+# its first run if it doesn't exist yet.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: git push origin HEAD:prod

@@ -1,0 +1,162 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-status-draft: var(--status-draft);
+  --color-status-draft-bg: var(--status-draft-bg);
+  --color-status-sent: var(--status-sent);
+  --color-status-sent-bg: var(--status-sent-bg);
+  --color-status-paid: var(--status-paid);
+  --color-status-paid-bg: var(--status-paid-bg);
+  --color-status-overdue: var(--status-overdue);
+  --color-status-overdue-bg: var(--status-overdue-bg);
+}
+
+:root {
+  /* VrikshaFX palette — sampled from the Rahul Goel HUF crest (assets/Logo.png):
+     navy ink, burgundy leaf accent, gold ornamental trim, white-dominant surfaces. */
+  --background: #ffffff;
+  --foreground: #1c2333;
+  --card: #ffffff;
+  --card-foreground: #1c2333;
+  --popover: #ffffff;
+  --popover-foreground: #1c2333;
+  --primary: #232b45;
+  --primary-foreground: #ffffff;
+  --secondary: #f4efe7;
+  --secondary-foreground: #232b45;
+  --muted: #f7f5f1;
+  --muted-foreground: #6b6456;
+  --accent: #f4efe7;
+  --accent-foreground: #232b45;
+  --destructive: #9c2b2b;
+  --border: #eae4d8;
+  --input: #eae4d8;
+  --ring: #b8935f;
+  --chart-1: #232b45;
+  --chart-2: #6e2a34;
+  --chart-3: #b8935f;
+  --chart-4: #8e7a5e;
+  --chart-5: #d9cbb0;
+  --radius: 0.5rem;
+  --sidebar: #fdfcfa;
+  --sidebar-foreground: #232b45;
+  --sidebar-primary: #232b45;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f4efe7;
+  --sidebar-accent-foreground: #232b45;
+  --sidebar-border: #eae4d8;
+  --sidebar-ring: #b8935f;
+
+  /* Invoice status indicators — Draft/Sent/Paid/Overdue */
+  --status-draft: #6b6456;
+  --status-draft-bg: #f7f5f1;
+  --status-sent: #232b45;
+  --status-sent-bg: #edeff5;
+  --status-paid: #1f7a4d;
+  --status-paid-bg: #e7f5ec;
+  --status-overdue: #9c2b2b;
+  --status-overdue-bg: #fbeaea;
+}
+
+.dark {
+  --background: #12161f;
+  --foreground: #ede9e0;
+  --card: #181d29;
+  --card-foreground: #ede9e0;
+  --popover: #181d29;
+  --popover-foreground: #ede9e0;
+  --primary: #c7a567;
+  --primary-foreground: #12161f;
+  --secondary: #232b45;
+  --secondary-foreground: #ede9e0;
+  --muted: #1d2330;
+  --muted-foreground: #9a9488;
+  --accent: #232b45;
+  --accent-foreground: #ede9e0;
+  --destructive: #c1544f;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: #c7a567;
+  --chart-1: #c7a567;
+  --chart-2: #8e7a5e;
+  --chart-3: #6e2a34;
+  --chart-4: #3b4568;
+  --chart-5: #d9cbb0;
+  --sidebar: #0b0e15;
+  --sidebar-foreground: #d8d2c4;
+  --sidebar-primary: #c7a567;
+  --sidebar-primary-foreground: #12161f;
+  --sidebar-accent: #1d2330;
+  --sidebar-accent-foreground: #ede9e0;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: #c7a567;
+
+  --status-draft: #9a9488;
+  --status-draft-bg: #1d2330;
+  --status-sent: #8fa0c7;
+  --status-sent-bg: #1a2333;
+  --status-paid: #4ade80;
+  --status-paid-bg: #103820;
+  --status-overdue: #e08585;
+  --status-overdue-bg: #3b1414;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    /* Large-fonts baseline: 18px root instead of Tailwind's default 16px —
+       scales every rem-based text/spacing utility up together. */
+    font-size: 112.5%;
+  }
+}
